@@ -6,7 +6,7 @@ from semantic_router.utils.logger import logger
 
 class Graph:
     def __init__(self, max_steps: int = 10):
-        self.nodes = []
+        self.nodes = {}
         self.edges = []
         self.start_node = None
         self.end_nodes = []
@@ -15,7 +15,9 @@ class Graph:
         self.max_steps = max_steps
 
     def add_node(self, node):
-        self.nodes.append(node)
+        if node.name in self.nodes:
+            raise Exception(f"Node with name '{node.name}' already exists.")
+        self.nodes[node.name] = node
         if node.is_start:
             if self.start_node is not None:
                 raise Exception(
@@ -27,10 +29,37 @@ class Graph:
         if node.is_end:
             self.end_nodes.append(node)
 
-    def add_edge(self, source: _Node, destination: _Node):
-        # TODO add logic to check that source and destination are nodes
-        # and they exist in the graph object already
-        edge = Edge(source, destination)
+    def add_edge(self, source: _Node | str, destination: _Node | str):
+        """Adds an edge between two nodes that already exist in the graph.
+        
+        Args:
+            source: The source node or its name.
+            destination: The destination node or its name.
+        """
+        source_node, destination_node = None, None
+        # get source node from graph
+        if isinstance(source, str):
+            source_node = self.nodes.get(source)
+        else:
+            # Check if it's a node-like object by looking for required attributes
+            if hasattr(source, 'name'):
+                source_node = self.nodes.get(source.name)
+        if source_node is None:
+            raise ValueError(
+                f"Node with name '{source.name if hasattr(source, 'name') else source}' not found."
+            )
+        # get destination node from graph
+        if isinstance(destination, str):
+            destination_node = self.nodes.get(destination)
+        else:
+            # Check if it's a node-like object by looking for required attributes
+            if hasattr(destination, 'name'):
+                destination_node = self.nodes.get(destination.name)
+        if destination_node is None:
+            raise ValueError(
+                f"Node with name '{destination.name if hasattr(destination, 'name') else destination}' not found."
+            )
+        edge = Edge(source_node, destination_node)
         self.edges.append(edge)
 
     def add_router(self, sources: list[_Node], router: _Node, destinations: List[_Node]):

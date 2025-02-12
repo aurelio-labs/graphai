@@ -31,6 +31,7 @@ class _Node:
         start: bool = False,
         end: bool = False,
         stream: bool = False,
+        name: str | None = None,
     ) -> Callable:
         """Decorator validating node structure.
         """
@@ -117,7 +118,7 @@ class _Node:
                 return out
 
         NodeClass.__name__ = func.__name__
-        NodeClass.name = func.__name__
+        NodeClass.name = name or func.__name__
         NodeClass.__doc__ = func.__doc__
         NodeClass.is_start = start
         NodeClass.is_end = end
@@ -132,14 +133,15 @@ class _Node:
         start: bool = False,
         end: bool = False,
         stream: bool = False,
+        name: str | None = None,
     ):
         # We must wrap the call to the decorator in a function for it to work
         # correctly with or without parenthesis
-        def wrap(func: Callable, start=start, end=end, stream=stream) -> Callable:
-            return self._node(func=func, start=start, end=end, stream=stream)
+        def wrap(func: Callable, start=start, end=end, stream=stream, name=name) -> Callable:
+            return self._node(func=func, start=start, end=end, stream=stream, name=name)
         if func:
             # Decorator is called without parenthesis
-            return wrap(func=func, start=start, end=end, stream=stream)
+            return wrap(func=func, start=start, end=end, stream=stream, name=name)
         # Decorator is called with parenthesis
         return wrap
 
