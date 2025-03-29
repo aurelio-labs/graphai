@@ -1,11 +1,13 @@
 from typing import List, Dict, Any, Optional
 from graphai.nodes.base import _Node
 from graphai.callback import Callback
-from semantic_router.utils.logger import logger
+from graphai.utils import logger
 
 
 class Graph:
-    def __init__(self, max_steps: int = 10, initial_state: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, max_steps: int = 10, initial_state: Optional[Dict[str, Any]] = None
+    ):
         self.nodes: Dict[str, _Node] = {}
         self.edges: List[Any] = []
         self.start_node: Optional[_Node] = None
@@ -49,7 +51,7 @@ class Graph:
 
     def add_edge(self, source: _Node | str, destination: _Node | str):
         """Adds an edge between two nodes that already exist in the graph.
-        
+
         Args:
             source: The source node or its name.
             destination: The destination node or its name.
@@ -60,7 +62,7 @@ class Graph:
             source_node = self.nodes.get(source)
         else:
             # Check if it's a node-like object by looking for required attributes
-            if hasattr(source, 'name'):
+            if hasattr(source, "name"):
                 source_node = self.nodes.get(source.name)
         if source_node is None:
             raise ValueError(
@@ -71,7 +73,7 @@ class Graph:
             destination_node = self.nodes.get(destination)
         else:
             # Check if it's a node-like object by looking for required attributes
-            if hasattr(destination, 'name'):
+            if hasattr(destination, "name"):
                 destination_node = self.nodes.get(destination.name)
         if destination_node is None:
             raise ValueError(
@@ -80,7 +82,9 @@ class Graph:
         edge = Edge(source_node, destination_node)
         self.edges.append(edge)
 
-    def add_router(self, sources: list[_Node], router: _Node, destinations: List[_Node]):
+    def add_router(
+        self, sources: list[_Node], router: _Node, destinations: List[_Node]
+    ):
         if not router.is_router:
             raise TypeError("A router object must be passed to the router parameter.")
         [self.add_edge(source, router) for source in sources]
@@ -126,7 +130,9 @@ class Graph:
                 # add callback tokens and param here if we are streaming
                 await self.callback.start_node(node_name=current_node.name)
                 # Include graph's internal state in the node execution context
-                output = await current_node.invoke(input=state, callback=self.callback, state=self.state)
+                output = await current_node.invoke(
+                    input=state, callback=self.callback, state=self.state
+                )
                 self._validate_output(output=output, node_name=current_node.name)
                 await self.callback.end_node(node_name=current_node.name)
             else:
@@ -164,13 +170,13 @@ class Graph:
 
     def _get_node_by_name(self, node_name: str) -> _Node:
         """Get a node by its name.
-        
+
         Args:
             node_name: The name of the node to find.
-            
+
         Returns:
             The node with the given name.
-            
+
         Raises:
             Exception: If no node with the given name is found.
         """
@@ -191,12 +197,16 @@ class Graph:
         try:
             import networkx as nx
         except ImportError:
-            raise ImportError("NetworkX is required for visualization. Please install it with 'pip install networkx'.")
+            raise ImportError(
+                "NetworkX is required for visualization. Please install it with 'pip install networkx'."
+            )
 
         try:
             import matplotlib.pyplot as plt
         except ImportError:
-            raise ImportError("Matplotlib is required for visualization. Please install it with 'pip install matplotlib'.")
+            raise ImportError(
+                "Matplotlib is required for visualization. Please install it with 'pip install matplotlib'."
+            )
 
         G = nx.DiGraph()
 
@@ -207,7 +217,9 @@ class Graph:
             G.add_edge(edge.source.name, edge.destination.name)
 
         if nx.is_directed_acyclic_graph(G):
-            logger.info("The graph is acyclic. Visualization will use a topological layout.")
+            logger.info(
+                "The graph is acyclic. Visualization will use a topological layout."
+            )
             # Use topological layout if acyclic
             # Compute the topological generations
             generations = list(nx.topological_generations(G))
@@ -241,17 +253,27 @@ class Graph:
                 pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
 
         else:
-            print("Warning: The graph contains cycles. Visualization will use a spring layout.")
+            print(
+                "Warning: The graph contains cycles. Visualization will use a spring layout."
+            )
             pos = nx.spring_layout(G, k=1, iterations=50)
 
         plt.figure(figsize=(8, 6))
-        nx.draw(G, pos, with_labels=True, node_color='lightblue', 
-                node_size=3000, font_size=8, font_weight='bold', 
-                arrows=True, edge_color='gray', arrowsize=20)
+        nx.draw(
+            G,
+            pos,
+            with_labels=True,
+            node_color="lightblue",
+            node_size=3000,
+            font_size=8,
+            font_weight="bold",
+            arrows=True,
+            edge_color="gray",
+            arrowsize=20,
+        )
 
-        plt.axis('off')
+        plt.axis("off")
         plt.show()
-
 
 
 class Edge:
