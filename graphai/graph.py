@@ -4,6 +4,7 @@ from typing import Any, Iterable, Protocol
 from graphlib import TopologicalSorter, CycleError
 from graphai.callback import Callback
 from graphai.utils import logger
+import asyncio
 
 
 # to fix mypy error
@@ -323,57 +324,87 @@ class Graph:
                 f"Instead, got {type(output)} from '{output}'."
             )
 
-    async def execute(self, input, callback: Callback | None = None):
+    def _get_next_nodes(self, current_node: NodeProtocol) -> list[NodeProtocol]:
+        """Return all successor nodes for the given node."""
+        return [edge.destination for edge in self.edges if edge.source == current_node]
+
+    async def _invoke_node(
+        self, node: NodeProtocol, state: dict[str, Any], callback: Callback
+    ):
+        if node.stream:
+            await callback.start_node(node_name=node.name)
+            output = await node.invoke(input=state, callback=callback, state=self.state)
+            self._validate_output(output=output, node_name=node.name)
+            await callback.end_node(node_name=node.name)
+        else:
+            output = await node.invoke(input=state, state=self.state)
+            self._validate_output(output=output, node_name=node.name)
+        return output
+
+    async def _execute_branch(
+        self,
+        current_node: NodeProtocol,
+        state: dict[str, Any],
+        callback: Callback,
+        steps: int,
+    ):
+        """Recursively execute a branch starting from `current_node`.
+        When a node has multiple successors, run them concurrently and merge their outputs."""
+        while True:
+            output = await self._invoke_node(current_node, state, callback)
+            state = {**state, **output}  # merge node output into local state
+            if current_node.is_end:
+                break
+            if current_node.is_router:
+                next_node_name = str(output["choice"])
+                del output["choice"]
+                current_node = self._get_node_by_name(node_name=next_node_name)
+                continue
+
+            next_nodes = self._get_next_nodes(current_node)
+            if not next_nodes:
+                raise Exception(
+                    f"No outgoing edge found for current node '{current_node.name}'."
+                )
+            if len(next_nodes) == 1:
+                current_node = next_nodes[0]
+            else:
+                # Run each branch concurrently
+                results = await asyncio.gather(
+                    *[
+                        self._execute_branch(n, state.copy(), callback, steps + 1)
+                        for n in next_nodes
+                    ]
+                )
+                merged = state.copy()
+                for res in results:
+                    # merge states returned by each branch
+                    for k, v in res.items():
+                        if k != "callback":
+                            merged[k] = v
+                return merged
+            steps += 1
+            if steps >= self.max_steps:
+                raise Exception(
+                    f"Max steps reached: {self.max_steps}. You can modify this by setting `max_steps` when initializing the Graph object."
+                )
+        return state
+
+    async def execute(self, input: dict[str, Any], callback: Callback | None = None):
         # TODO JB: may need to add init callback here to init the queue on every new execution
         if callback is None:
             callback = self.get_callback()
 
         # Type assertion to tell the type checker that start_node is not None after compile()
         assert self.start_node is not None, "Graph must be compiled before execution"
-        current_node = self.start_node
 
         state = input
-        # Don't reset the graph state if it was initialized with initial_state
-        steps = 0
-        while True:
-            # we invoke the node here
-            if current_node.stream:
-                # add callback tokens and param here if we are streaming
-                await callback.start_node(node_name=current_node.name)
-                # Include graph's internal state in the node execution context
-                output = await current_node.invoke(
-                    input=state, callback=callback, state=self.state
-                )
-                self._validate_output(output=output, node_name=current_node.name)
-                await callback.end_node(node_name=current_node.name)
-            else:
-                # Include graph's internal state in the node execution context
-                output = await current_node.invoke(input=state, state=self.state)
-                self._validate_output(output=output, node_name=current_node.name)
-            # add output to state
-            state = {**state, **output}
-            if current_node.is_end:
-                # finish loop if this was an end node
-                break
-            if current_node.is_router:
-                # if we have a router node we let the router decide the next node
-                next_node_name = str(output["choice"])
-                del output["choice"]
-                current_node = self._get_node_by_name(node_name=next_node_name)
-            else:
-                # otherwise, we have linear path
-                current_node = self._get_next_node(current_node=current_node)
-            steps += 1
-            if steps >= self.max_steps:
-                raise Exception(
-                    f"Max steps reached: {self.max_steps}. You can modify this "
-                    "by setting `max_steps` when initializing the Graph object."
-                )
+        result = await self._execute_branch(self.start_node, state, callback, 0)
         # TODO JB: may need to add end callback here to close the queue for every execution
-        if callback and "callback" in state:
+        if callback and "callback" in result:
             await callback.close()
-            del state["callback"]
-        return state
+            del result["callback"]
+        return result
 
     async def execute_many(
         self, inputs: Iterable[dict[str, Any]], *, concurrency: int = 5
@@ -444,6 +475,14 @@ class Graph:
         raise Exception(
             f"No outgoing edge found for current node '{current_node.name}'."
         )
+
+    def add_parallel(
+        self, source: NodeProtocol | str, destinations: list[NodeProtocol | str]
+    ):
+        """Add multiple outgoing edges from a single source node to be executed in parallel."""
+        for dest in destinations:
+            self.add_edge(source, dest)
+        return self
 
     def visualize(self, *, save_path: str | None = None):
         """Render the current graph. If matplotlib is not installed,
