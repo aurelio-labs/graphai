@@ -1,6 +1,6 @@
 [project]
 name = "graphai-lib"
-version = "0.0.10rc2"
+version = "0.0.10rc3"
 description = "Not an AI framework"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"

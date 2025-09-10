@@ -437,7 +437,7 @@ wheels = [
 
 [[package]]
 name = "graphai-lib"
-version = "0.0.10rc2"
+version = "0.0.10rc3"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

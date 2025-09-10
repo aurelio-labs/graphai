@@ -15,6 +15,14 @@ See below for all notable changes to the GraphAI library.
 - New `add_parallel()` convenience method for creating parallel branches
   - Syntactic sugar for adding multiple edges from one source to multiple destinations
 
+### Changed
+- Enhanced `EventCallback.__call__()` and `EventCallback.acall()` method signatures
+  - Removed legacy `node_name` parameter for cleaner API
+  - Added `type` parameter to specify event type directly (defaults to `GraphEventType.CALLBACK`)
+  - Added `identifier` parameter for custom event identification
+  - Added `params` parameter for event metadata
+  - Improved flexibility for custom event handling and streaming
+
 ## [0.0.9] - 2025-09-05
 
 ### Added

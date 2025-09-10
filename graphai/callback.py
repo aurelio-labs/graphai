@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pydantic import Field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from collections.abc import AsyncIterator
 import warnings
 
@@ -27,8 +27,8 @@ class GraphEvent:
     """A graph event emitted for specific graph events such as start node or end node,
     and used by the callback to emit user-defined events.
 
-    :param type: The type of event, can be start_node, end_node, or callback.
-    :type type: GraphEventType
+    :param type: The type of event, can be start_node, end_node, callback, or a custom str.
+    :type type: GraphEventType | str
     :param identifier: The identifier of the event, this is set typically by a callback
         handler and can be used to distinguish between different events. For example, a
         conversation/session ID could be used.
@@ -39,7 +39,7 @@ class GraphEvent:
         or event metadata.
     :type params: dict[str, Any] | None
     """
-    type: GraphEventType
+    type: GraphEventType | str
     identifier: str
     token: str | None = None
     params: dict[str, Any] | None = None
@@ -59,6 +59,16 @@ class GraphEvent:
         }
         data = f"data: {json.dumps(event_dict, ensure_ascii=False, separators=(',', ':'))}\n\n"
         return data.encode(charset)
+
+
+@runtime_checkable
+class CallbackProtocol(Protocol):
+    """Protocol defining the interface for callback handlers."""
+    queue: asyncio.Queue
+    
+    async def start_node(self, node_name: str, active: bool = True) -> None: ...
+    async def end_node(self, node_name: str) -> None: ...
+    async def close(self) -> None: ...
 
 
 class Callback:
@@ -262,7 +272,7 @@ class Callback:
         )
 
 
-class EventCallback(Callback):
+class EventCallback:
     """The event callback handler class. Outputs a stream of structured text
     tokens. It is recommended to use the newer `EventCallback` handler instead.
     """
@@ -277,31 +287,84 @@ class EventCallback(Callback):
             "deprecated and will be removed in v0.1.0.",
             DeprecationWarning
         )
-        if special_token_format is None:
-            special_token_format = "<{identifier}:{token}:{params}>"
-        if token_format is None:
-            token_format = "{token}"
-        super().__init__(identifier, special_token_format, token_format)
+        self.identifier = identifier
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self._done = False
+        self._first_token = True
+        self._current_node_name: str | None = None
+        self._active = True
         self.events: list[GraphEvent] = []
 
-    def __call__(self, token: str, node_name: str | None = None):
+    @property
+    def first_token(self) -> bool:
+        return self._first_token
+
+    @first_token.setter
+    def first_token(self, value: bool):
+        self._first_token = value
+
+    @property
+    def current_node_name(self) -> str | None:
+        return self._current_node_name
+
+    @current_node_name.setter
+    def current_node_name(self, value: str | None):
+        self._current_node_name = value
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    @active.setter
+    def active(self, value: bool):
+        self._active = value
+
+    def __call__(
+        self,
+        token: str | None = None,
+        type: GraphEventType | str = GraphEventType.CALLBACK,
+        identifier: str | None = None,
+        params: dict[str, Any] | None = None,
+    ):
+        """Builds a GraphEvent object and adds it to the queue.
+        """
         if self._done:
             raise RuntimeError("Cannot add tokens to a closed stream")
-        self._check_node_name(node_name=node_name)
-        event = GraphEvent(type=GraphEventType.CALLBACK, identifier=self.identifier, token=token, params=None)
+        if identifier is None:
+            identifier = self.identifier
+        event = GraphEvent(
+            type=type,
+            identifier=self.identifier,
+            token=token,
+            params=params,
+        )
         # otherwise we just assume node is correct and send token
         self.queue.put_nowait(event)
 
-    async def acall(self, token: str, node_name: str | None = None):
+    async def acall(
+        self,
+        token: str | None = None,
+        type: GraphEventType | str = GraphEventType.CALLBACK,
+        identifier: str | None = None,
+        params: dict[str, Any] | None = None,
+    ):
+        """Builds a GraphEvent object and adds it to the queue.
+        """
         # TODO JB: do we need to have `node_name` param?
         if self._done:
             raise RuntimeError("Cannot add tokens to a closed stream")
-        self._check_node_name(node_name=node_name)
-        event = GraphEvent(type=GraphEventType.CALLBACK, identifier=self.identifier, token=token, params=None)
+        if identifier is None:
+            identifier = self.identifier
+        event = GraphEvent(
+            type=type,
+            identifier=self.identifier,
+            token=token,
+            params=params,
+        )
         # otherwise we just assume node is correct and send token
         self.queue.put_nowait(event)
 
-    async def aiter(self) -> AsyncIterator[GraphEvent]:  # type: ignore[override]
+    async def aiter(self) -> AsyncIterator[GraphEvent]:
         """Used by receiver to get the tokens from the stream queue. Creates
         a generator that yields tokens from the queue until the END token is
         received.
