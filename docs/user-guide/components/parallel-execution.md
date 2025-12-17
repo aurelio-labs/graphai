@@ -214,15 +214,20 @@ async def tool_a(input: dict):
 async def tool_b(input: dict):
     return {"b_result": 2}
 
+@node(name="tool_c")
+async def tool_c(input: dict):
+    return {"c_result": 3}
+
 @node(end=True)
 async def end(input: dict):
     return {}
 
 g = Graph()
-g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(tool_c).add_node(end)
 g.add_edge(start, parallel_router)
 g.add_edge(parallel_router, tool_a)
 g.add_edge(parallel_router, tool_b)
+g.add_edge(parallel_router, tool_c)  # tool_c has an edge but is not in choices
 g.add_join([tool_a, tool_b], end)
 
 result = await g.execute({"input": {}})
@@ -230,7 +235,11 @@ result = await g.execute({"input": {}})
 # Results from parallel branches are merged into state
 assert result["a_result"] == 1
 assert result["b_result"] == 2
+# tool_c is NOT executed because it's not in the choices array
+assert "c_result" not in result
 ```
+
+> **Note**: When a parallel router shares an edge with a node that is not included in the router's `choices` array, that node will not be executed. Only nodes whose names appear in the returned `choices` list will run. In the example above, `tool_c` has an edge from the router but is not included in `choices`, so it does not execute.
 
 ### Router with Join (Iterative Patterns)
 
