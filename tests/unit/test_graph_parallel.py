@@ -274,16 +274,15 @@ async def test_router_parallel_choices():
 
     result = await g.execute({"input": {}})
 
-    assert "parallel_results" in result
-    assert "tool_a" in result["parallel_results"]
-    assert "tool_b" in result["parallel_results"]
-    assert result["a_result"] == 1
-    assert result["b_result"] == 2
+    assert "tool_a" in result["choices"]
+    assert "tool_b" in result["choices"]
+    assert result.get("a_result") == 1
+    assert result.get("b_result") == 2
 
 
 @pytest.mark.asyncio
-async def test_router_parallel_with_continuation():
-    """Router with continuation should return to specified node after parallel execution."""
+async def test_router_parallel_with_join():
+    """Router with join should return to specified node after parallel execution."""
 
     call_count = {"router": 0}
 
@@ -298,7 +297,6 @@ async def test_router_parallel_with_continuation():
             return {"choice": "end"}
         return {
             "choices": ["tool_a", "tool_b"],
-            "continuation": "parallel_router",
         }
 
     @node(name="tool_a")
@@ -318,14 +316,14 @@ async def test_router_parallel_with_continuation():
     g.add_edge(start, parallel_router)
     g.add_edge(parallel_router, tool_a)
     g.add_edge(parallel_router, tool_b)
+    g.add_join([tool_a, tool_b], parallel_router)
     g.add_edge(parallel_router, end)
-    g.add_edge(tool_a, end)
-    g.add_edge(tool_b, end)
 
     result = await g.execute({"input": {}})
 
     assert call_count["router"] == 2
-    assert "parallel_results" in result
+    assert "a_result" in result
+    assert "b_result" in result
     assert result["final"] == "done"
 
 

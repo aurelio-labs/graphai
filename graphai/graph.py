@@ -372,53 +372,23 @@ class Graph:
                 break
             if current_node.is_router:
                 if "choices" in output:
+                    # for parallel execution, we collect next_nodes
                     choice_names = output["choices"]
-                    continuation = output.get("continuation")
                     del output["choices"]
-                    if "continuation" in output:
-                        del output["continuation"]
-
                     next_nodes = [self._get_node_by_name(name) for name in choice_names]
-
-                    results = await asyncio.gather(
-                        *[
-                            self._execute_branch(
-                                current_node=n,
-                                state=state.copy(),
-                                callback=callback,
-                                steps=steps + 1,
-                                stop_at_join=True,
-                            )
-                            for n in next_nodes
-                        ]
-                    )
-
-                    merged = state.copy()
-                    for res in results:
-                        for k, v in res.items():
-                            if k != "callback":
-                                merged[k] = v
-
-                    merged["parallel_results"] = {
-                        choice_names[i]: results[i] for i in range(len(choice_names))
-                    }
-
-                    if continuation:
-                        current_node = self._get_node_by_name(continuation)
-                        state = merged
-                        continue
-                    else:
-                        return merged
                 else:
+                    # otherwise business as usual - get the next node only
                     next_node_name = str(output["choice"])
                     del output["choice"]
                     current_node = self._get_node_by_name(node_name=next_node_name)
                     continue
+            else:
+                # for sequential execution, we can just get the next node
+                next_nodes = self._get_next_nodes(current_node)
             if stop_at_join and current_node in self.join_nodes:
                 # for parallel branches, wait at JoinEdge until all branches are complete
                 return state
 
-            next_nodes = self._get_next_nodes(current_node)
             if not next_nodes:
                 raise Exception(
                     f"No outgoing edge found for current node '{current_node.name}'."
