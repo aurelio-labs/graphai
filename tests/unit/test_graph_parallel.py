@@ -307,16 +307,21 @@ async def test_router_parallel_with_join():
     async def tool_b(input: dict):
         return {"b_result": 2}
 
+    @node(name="tool_c")
+    async def tool_c(input: dict):
+        return {"c_result": 3}
+
     @node(end=True)
     async def end(input: dict):
         return {"final": "done"}
 
     g = Graph()
-    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(tool_c).add_node(end)
     g.add_edge(start, parallel_router)
     g.add_edge(parallel_router, tool_a)
     g.add_edge(parallel_router, tool_b)
-    g.add_join([tool_a, tool_b], parallel_router)
+    g.add_edge(parallel_router, tool_c)
+    g.add_join([tool_a, tool_b, tool_c], parallel_router)
     g.add_edge(parallel_router, end)
 
     result = await g.execute({"input": {}})
@@ -324,6 +329,7 @@ async def test_router_parallel_with_join():
     assert call_count["router"] == 2
     assert "a_result" in result
     assert "b_result" in result
+    assert "c_result" not in result
     assert result["final"] == "done"
 
 
