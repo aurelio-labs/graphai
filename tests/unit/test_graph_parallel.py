@@ -31,7 +31,6 @@ async def test_parallel_branches_merge_state():
     # both branches lead to a common end
     g.add_edge(branch_a, end)
     g.add_edge(branch_b, end)
-
     result = await g.execute(input={"input": {}})
     # both branch outputs should be present in the final state
     assert result.get("a") == 1
