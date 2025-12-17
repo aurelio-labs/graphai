@@ -12,7 +12,7 @@ venv/
 figures
 tmp
 
-.egg-info
+*.egg-info/
 
 # local env files
 .env*.local
