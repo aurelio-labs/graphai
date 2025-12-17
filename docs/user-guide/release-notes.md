@@ -14,6 +14,7 @@ See below for all notable changes to the GraphAI library.
   - Prevents duplicate execution of downstream nodes
 - New `add_parallel()` convenience method for creating parallel branches
   - Syntactic sugar for adding multiple edges from one source to multiple destinations
+- Parallel execution support for router nodes with multiple choices by returning `choices: list[str]` rather than `choice: str`
 
 ### Changed
 - Enhanced `EventCallback.__call__()` and `EventCallback.acall()` method signatures
