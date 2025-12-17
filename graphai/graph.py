@@ -371,10 +371,49 @@ class Graph:
             if current_node.is_end:
                 break
             if current_node.is_router:
-                next_node_name = str(output["choice"])
-                del output["choice"]
-                current_node = self._get_node_by_name(node_name=next_node_name)
-                continue
+                if "choices" in output:
+                    choice_names = output["choices"]
+                    continuation = output.get("continuation")
+                    del output["choices"]
+                    if "continuation" in output:
+                        del output["continuation"]
+
+                    next_nodes = [self._get_node_by_name(name) for name in choice_names]
+
+                    results = await asyncio.gather(
+                        *[
+                            self._execute_branch(
+                                current_node=n,
+                                state=state.copy(),
+                                callback=callback,
+                                steps=steps + 1,
+                                stop_at_join=True,
+                            )
+                            for n in next_nodes
+                        ]
+                    )
+
+                    merged = state.copy()
+                    for res in results:
+                        for k, v in res.items():
+                            if k != "callback":
+                                merged[k] = v
+
+                    merged["parallel_results"] = {
+                        choice_names[i]: results[i] for i in range(len(choice_names))
+                    }
+
+                    if continuation:
+                        current_node = self._get_node_by_name(continuation)
+                        state = merged
+                        continue
+                    else:
+                        return merged
+                else:
+                    next_node_name = str(output["choice"])
+                    del output["choice"]
+                    current_node = self._get_node_by_name(node_name=next_node_name)
+                    continue
             if stop_at_join and current_node in self.join_nodes:
                 # for parallel branches, wait at JoinEdge until all branches are complete
                 return state

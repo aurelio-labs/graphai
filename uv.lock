@@ -459,6 +459,12 @@ docs = [
     { name = "pydoc-markdown", marker = "python_full_version < '3.12'" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.25.0" },
@@ -474,6 +480,12 @@ requires-dist = [
     { name = "types-networkx", marker = "extra == 'dev'", specifier = ">=3.4.2.20250319" },
 ]
 provides-extras = ["dev", "docs"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "pytest-asyncio", specifier = ">=0.25.3" },
+]
 
 [[package]]
 name = "idna"

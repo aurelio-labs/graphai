@@ -1,0 +1,32 @@
+Metadata-Version: 2.4
+Name: graphai-lib
+Version: 0.0.10rc3
+Summary: Not an AI framework
+Requires-Python: <3.14,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: pydantic>=2.11.1
+Provides-Extra: dev
+Requires-Dist: ipykernel>=6.25.0; extra == "dev"
+Requires-Dist: ruff>=0.1.5; extra == "dev"
+Requires-Dist: pytest>=8.2.0; extra == "dev"
+Requires-Dist: pytest-mock>=3.12.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+Requires-Dist: pytest-xdist>=3.5.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
+Requires-Dist: mypy>=1.7.1; extra == "dev"
+Requires-Dist: types-networkx>=3.4.2.20250319; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: pydoc-markdown>=4.8.2; python_version < "3.12" and extra == "docs"
+
+# Philosophy
+
+1. Async-first
+2. Minimize abstractions
+3. One way to do one thing
+4. Graph-based AI
+
+## Installation
+
+```
+pip install -qU graphai-lib
+```

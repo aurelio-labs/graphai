@@ -233,9 +233,137 @@ async def test_parallel_state_join():
     _ = await g.execute(input={"input": {}})
     # assert that the state contains everything from both branches
     state = g.get_state()
-    assert "start" in state["history"] 
-    assert "branch_a" in state["history"] 
-    assert "branch_b" in state["history"] 
-    assert "end" in state["history"] 
+    assert "start" in state["history"]
+    assert "branch_a" in state["history"]
+    assert "branch_b" in state["history"]
+    assert "end" in state["history"]
     # assert that we only have one "end" in state history
     assert len([x for x in state["history"] if x == "end"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_router_parallel_choices():
+    """Router returning multiple choices should execute all in parallel."""
+
+    @node(start=True)
+    async def start(input: dict):
+        return {}
+
+    @router
+    async def parallel_router(input: dict):
+        return {"choices": ["tool_a", "tool_b"]}
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        return {"a_result": 1}
+
+    @node(name="tool_b")
+    async def tool_b(input: dict):
+        return {"b_result": 2}
+
+    @node(end=True)
+    async def end(input: dict):
+        return {}
+
+    g = Graph()
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_edge(start, parallel_router)
+    g.add_edge(parallel_router, tool_a)
+    g.add_edge(parallel_router, tool_b)
+    g.add_edge(tool_a, end)
+    g.add_edge(tool_b, end)
+
+    result = await g.execute({"input": {}})
+
+    assert "parallel_results" in result
+    assert "tool_a" in result["parallel_results"]
+    assert "tool_b" in result["parallel_results"]
+    assert result["a_result"] == 1
+    assert result["b_result"] == 2
+
+
+@pytest.mark.asyncio
+async def test_router_parallel_with_continuation():
+    """Router with continuation should return to specified node after parallel execution."""
+
+    call_count = {"router": 0}
+
+    @node(start=True)
+    async def start(input: dict):
+        return {}
+
+    @router(name="parallel_router")
+    async def parallel_router(input: dict):
+        call_count["router"] += 1
+        if call_count["router"] > 1:
+            return {"choice": "end"}
+        return {
+            "choices": ["tool_a", "tool_b"],
+            "continuation": "parallel_router",
+        }
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        return {"a_result": 1}
+
+    @node(name="tool_b")
+    async def tool_b(input: dict):
+        return {"b_result": 2}
+
+    @node(end=True)
+    async def end(input: dict):
+        return {"final": "done"}
+
+    g = Graph()
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_edge(start, parallel_router)
+    g.add_edge(parallel_router, tool_a)
+    g.add_edge(parallel_router, tool_b)
+    g.add_edge(parallel_router, end)
+    g.add_edge(tool_a, end)
+    g.add_edge(tool_b, end)
+
+    result = await g.execute({"input": {}})
+
+    assert call_count["router"] == 2
+    assert "parallel_results" in result
+    assert result["final"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_router_single_choice_still_works():
+    """Existing single-choice router behavior should be unchanged."""
+
+    @node(start=True)
+    async def start(input: dict):
+        return {}
+
+    @router
+    async def single_router(input: dict):
+        return {"choice": "tool_a"}
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        return {"a_result": 1}
+
+    @node(name="tool_b")
+    async def tool_b(input: dict):
+        return {"b_result": 2}
+
+    @node(end=True)
+    async def end(input: dict):
+        return {}
+
+    g = Graph()
+    g.add_node(start).add_node(single_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_edge(start, single_router)
+    g.add_edge(single_router, tool_a)
+    g.add_edge(single_router, tool_b)
+    g.add_edge(tool_a, end)
+    g.add_edge(tool_b, end)
+
+    result = await g.execute({"input": {}})
+
+    assert result["a_result"] == 1
+    assert "b_result" not in result
+    assert "parallel_results" not in result

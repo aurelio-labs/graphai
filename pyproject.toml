@@ -46,3 +46,9 @@ warn_unused_ignores = true
 warn_no_return = true
 follow_imports = "normal"
 strict_optional = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.25.3",
+]
