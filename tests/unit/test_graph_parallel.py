@@ -274,16 +274,15 @@ async def test_router_parallel_choices():
 
     result = await g.execute({"input": {}})
 
-    assert "parallel_results" in result
-    assert "tool_a" in result["parallel_results"]
-    assert "tool_b" in result["parallel_results"]
-    assert result["a_result"] == 1
-    assert result["b_result"] == 2
+    assert "tool_a" in result["choices"]
+    assert "tool_b" in result["choices"]
+    assert result.get("a_result") == 1
+    assert result.get("b_result") == 2
 
 
 @pytest.mark.asyncio
-async def test_router_parallel_with_continuation():
-    """Router with continuation should return to specified node after parallel execution."""
+async def test_router_parallel_with_join():
+    """Router with join should return to specified node after parallel execution."""
 
     call_count = {"router": 0}
 
@@ -298,7 +297,6 @@ async def test_router_parallel_with_continuation():
             return {"choice": "end"}
         return {
             "choices": ["tool_a", "tool_b"],
-            "continuation": "parallel_router",
         }
 
     @node(name="tool_a")
@@ -309,23 +307,29 @@ async def test_router_parallel_with_continuation():
     async def tool_b(input: dict):
         return {"b_result": 2}
 
+    @node(name="tool_c")
+    async def tool_c(input: dict):
+        return {"c_result": 3}
+
     @node(end=True)
     async def end(input: dict):
         return {"final": "done"}
 
     g = Graph()
-    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(tool_c).add_node(end)
     g.add_edge(start, parallel_router)
     g.add_edge(parallel_router, tool_a)
     g.add_edge(parallel_router, tool_b)
+    g.add_edge(parallel_router, tool_c)
+    g.add_join([tool_a, tool_b, tool_c], parallel_router)
     g.add_edge(parallel_router, end)
-    g.add_edge(tool_a, end)
-    g.add_edge(tool_b, end)
 
     result = await g.execute({"input": {}})
 
     assert call_count["router"] == 2
-    assert "parallel_results" in result
+    assert "a_result" in result
+    assert "b_result" in result
+    assert "c_result" not in result
     assert result["final"] == "done"
 
 
