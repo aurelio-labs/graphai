@@ -370,3 +370,107 @@ async def test_router_single_choice_still_works():
     assert result["a_result"] == 1
     assert "b_result" not in result
     assert "parallel_results" not in result
+
+
+@pytest.mark.asyncio
+async def test_router_parallel_duplicate_node_names():
+    """Router returning duplicate node names should execute the same node multiple times.
+
+    Uses different sleep durations (1s vs 3s) to verify all branches are waited for.
+    """
+    import asyncio
+
+    call_count = {"tool_a": 0, "router": 0}
+    sleep_times = [3, 3, 1]  # Last invocation is fast, others are slow
+
+    @node(start=True)
+    async def start(input: dict):
+        return {}
+
+    @router(name="parallel_router")
+    async def parallel_router(input: dict):
+        call_count["router"] += 1
+        if call_count["router"] > 1:
+            return {"choice": "end"}
+        # Return the same node name multiple times
+        return {"choices": ["tool_a", "tool_a", "tool_a"]}
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        call_count["tool_a"] += 1
+        sleep_time = sleep_times.pop()
+        await asyncio.sleep(sleep_time)
+        return {"a_result": call_count["tool_a"]}
+
+    @node(end=True)
+    async def end(input: dict):
+        return {"final": "done"}
+
+    g = Graph()
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(end)
+    g.add_edge(start, parallel_router)
+    g.add_edge(parallel_router, tool_a)
+    g.add_join([tool_a], parallel_router)
+    g.add_edge(parallel_router, end)
+
+    result = await g.execute({"input": {}})
+
+    # tool_a should have been called 3 times (once for each duplicate in choices)
+    assert call_count["tool_a"] == 3
+    # Router should have been called twice (first for parallel, second to continue to end)
+    assert call_count["router"] == 2
+    assert result["final"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_router_parallel_mixed_duplicate_nodes():
+    """Router returning a mix of unique and duplicate node names."""
+    import asyncio
+
+    call_count = {"tool_a": 0, "tool_b": 0, "router": 0}
+
+    @node(start=True)
+    async def start(input: dict):
+        return {}
+
+    @router(name="parallel_router")
+    async def parallel_router(input: dict):
+        call_count["router"] += 1
+        if call_count["router"] > 1:
+            return {"choice": "end"}
+        # Mix of unique and duplicate nodes
+        return {"choices": ["tool_a", "tool_b", "tool_a", "tool_b", "tool_a"]}
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        call_count["tool_a"] += 1
+        await asyncio.sleep(0.01)
+        return {"a_count": call_count["tool_a"]}
+
+    @node(name="tool_b")
+    async def tool_b(input: dict):
+        call_count["tool_b"] += 1
+        await asyncio.sleep(0.01)
+        return {"b_count": call_count["tool_b"]}
+
+    @node(end=True)
+    async def end(input: dict):
+        return {"final": "done"}
+
+    g = Graph()
+    g.add_node(start).add_node(parallel_router).add_node(tool_a).add_node(tool_b).add_node(end)
+    g.add_edge(start, parallel_router)
+    g.add_edge(parallel_router, tool_a)
+    g.add_edge(parallel_router, tool_b)
+    g.add_join([tool_a, tool_b], parallel_router)
+    g.add_edge(parallel_router, end)
+
+    result = await g.execute({"input": {}})
+
+    # tool_a should have been called 3 times
+    assert call_count["tool_a"] == 3
+    # tool_b should have been called 2 times
+    assert call_count["tool_b"] == 2
+    # Router called twice
+    assert call_count["router"] == 2
+    assert result["final"] == "done"
