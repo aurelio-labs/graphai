@@ -362,9 +362,19 @@ class Graph:
         callback: Callback,
         steps: int,
         stop_at_join: bool = False,
+        branch_id: str | None = None,
     ):
         """Recursively execute a branch starting from `current_node`.
-        When a node has multiple successors, run them concurrently and merge their outputs."""
+        When a node has multiple successors, run them concurrently and merge their outputs.
+
+        Args:
+            current_node: The node to start execution from
+            state: The current state dict to pass to the node
+            callback: The callback instance for events
+            steps: Current step count for max_steps limit
+            stop_at_join: If True, stop execution when reaching a join node
+            branch_id: Unique identifier for this branch (used for parallel duplicate nodes)
+        """
         while True:
             output = await self._invoke_node(current_node, state, callback)
             state = {**state, **output}  # merge node output into local state
@@ -396,19 +406,32 @@ class Graph:
             if len(next_nodes) == 1:
                 current_node = next_nodes[0]
             else:
-                # Run each branch concurrently
-                results = await asyncio.gather(
-                    *[
+                # Run each branch concurrently, assigning unique branch IDs
+                # This ensures that even duplicate nodes (same node appearing multiple times)
+                # are tracked as separate invocations
+                branch_tasks = []
+                for idx, n in enumerate(next_nodes):
+                    # Create unique branch ID combining parent branch, node name, and index
+                    new_branch_id = f"{branch_id or 'root'}_{n.name}_{idx}"
+                    branch_tasks.append(
                         self._execute_branch(
                             current_node=n,
                             state=state.copy(),
                             callback=callback,
                             steps=steps + 1,
                             stop_at_join=True,  # force parallel branches to wait at JoinEdge
+                            branch_id=new_branch_id,
                         )
-                        for n in next_nodes
-                    ]
+                    )
+
+                # Wait for ALL branches to complete (including duplicate node invocations)
+                logger.debug(
+                    f"Starting {len(branch_tasks)} parallel branches: "
+                    f"{[n.name for n in next_nodes]}"
                 )
+                results = await asyncio.gather(*branch_tasks)
+                logger.debug(f"All {len(results)} parallel branches completed")
+
                 # merge states returned by each branch
                 merged = state.copy()
                 for res in results:
