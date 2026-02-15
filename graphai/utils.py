@@ -11,6 +11,7 @@ import logging
 # we support python 3.10 so we define our own StrEnum (introduced in 3.11)
 class StrEnum(str, Enum):
     """Backport of StrEnum for Python < 3.11"""
+
     def __str__(self):
         return self.value
 
@@ -59,7 +60,7 @@ def setup_custom_logger(name):
 
     if not logger.hasHandlers():
         add_coloured_handler(logger)
-        
+
         # Set log level from environment variable, default to INFO
         log_level = os.getenv("GRAPHAI_LOG_LEVEL", "INFO").upper()
         level_map = {
@@ -78,17 +79,40 @@ def setup_custom_logger(name):
 logger: logging.Logger = setup_custom_logger(__name__)
 
 
-def openai_type_mapping(param_type: str) -> str:
-    if param_type == "int":
-        return "number"
-    elif param_type == "float":
-        return "number"
-    elif param_type == "str":
-        return "string"
-    elif param_type == "bool":
-        return "boolean"
+def openai_type_mapping(param_type: str, *, strict_json_types: bool = False) -> str:
+    """Map Python type names to schema type names.
+
+    - When ``strict_json_types=False`` (default), use relaxed/OpenAI-style mapping
+      where both ``int`` and ``float`` map to ``number``.
+    - When ``strict_json_types=True``, use strict JSON Schema types where
+      ``int`` -> ``integer`` and ``float`` -> ``number``.
+    """
+    if strict_json_types:
+        if param_type == "int":
+            return "integer"
+        elif param_type == "float":
+            return "number"
+        elif param_type == "str":
+            return "string"
+        elif param_type == "bool":
+            return "boolean"
+        elif param_type in ("list", "List"):
+            return "array"
+        elif param_type in ("dict", "Dict"):
+            return "object"
+        else:
+            return "object"
     else:
-        return "object"
+        if param_type == "int":
+            return "number"
+        elif param_type == "float":
+            return "number"
+        elif param_type == "str":
+            return "string"
+        elif param_type == "bool":
+            return "boolean"
+        else:
+            return "object"
 
 
 class Parameter(BaseModel):
@@ -114,7 +138,7 @@ class Parameter(BaseModel):
     default: Any = Field(description="The default value of the parameter")
     required: bool = Field(description="Whether the parameter is required")
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, strict_json_types: bool = False) -> dict[str, Any]:
         """Convert the parameter to a dictionary for an standard dictionary-based function schema.
         This is the most common format used by LLM providers, including OpenAI, Ollama, and others.
 
@@ -124,13 +148,17 @@ class Parameter(BaseModel):
         return {
             self.name: {
                 "description": self.description,
-                "type": openai_type_mapping(self.type),
+                "type": openai_type_mapping(
+                    self.type, strict_json_types=strict_json_types
+                ),
             }
         }
+
 
 class OpenAIAPI(StrEnum):
     COMPLETIONS = "completions"
     RESPONSES = "responses"
+
 
 class FunctionSchema(BaseModel):
     """Class that consumes a function and can return a schema required by
@@ -152,7 +180,7 @@ class FunctionSchema(BaseModel):
         """
         if not callable(function):
             raise TypeError("Function must be a Callable")
-        
+
         name = function.__name__
         doc = inspect.getdoc(function)
         description = str(doc) if doc else ""
@@ -181,7 +209,7 @@ class FunctionSchema(BaseModel):
     @classmethod
     def from_pydantic(cls, model: type[BaseModel]) -> "FunctionSchema":
         """Create a FunctionSchema from a Pydantic model class.
-        
+
         :param model: The Pydantic model class to convert
         :type model: type[BaseModel]
         :return: FunctionSchema instance
@@ -190,43 +218,46 @@ class FunctionSchema(BaseModel):
         # Extract model metadata
         name = model.__name__
         description = model.__doc__ or ""
-        
+
         # Build parameters list
         parameters = []
         signature_parts = []
-        
+
         for field_name, field_info in model.model_fields.items():
             # Get the field type
             field_type = model.__annotations__.get(field_name)
-            
+
             # Determine the type name - handle Optional and other generic types
             type_name = str(field_type)
-            
+
             # Try to extract the actual type from Optional[T] -> T
             origin = get_origin(field_type)
             args = get_args(field_type)
-            
+
             if origin is Union:
                 # This is likely Optional[T] which is Union[T, None]
                 non_none_types = [arg for arg in args if arg is not type(None)]
                 if non_none_types:
                     actual_type = non_none_types[0]
-                    if hasattr(actual_type, '__name__'):
+                    if hasattr(actual_type, "__name__"):
                         type_name = actual_type.__name__
                     else:
                         type_name = str(actual_type)
-            elif field_type and hasattr(field_type, '__name__'):
+            elif field_type and hasattr(field_type, "__name__"):
                 type_name = field_type.__name__
-            
+
             # Check if field is required (no default value)
             # In Pydantic v2, PydanticUndefined means no default
             is_required = (
-                field_info.default is PydanticUndefined 
+                field_info.default is PydanticUndefined
                 and field_info.default_factory is None
             )
-            
+
             # Get the actual default value
-            if field_info.default is not PydanticUndefined and field_info.default is not None:
+            if (
+                field_info.default is not PydanticUndefined
+                and field_info.default is not None
+            ):
                 default_value = field_info.default
             elif field_info.default_factory is not None:
                 # For default_factory, we can't always call it without arguments
@@ -239,7 +270,7 @@ class FunctionSchema(BaseModel):
                     default_value = "<factory>"
             else:
                 default_value = inspect.Parameter.empty
-            
+
             # Add parameter
             parameters.append(
                 Parameter(
@@ -250,15 +281,17 @@ class FunctionSchema(BaseModel):
                     required=is_required,
                 )
             )
-            
+
             # Build signature part
             if default_value != inspect.Parameter.empty:
-                signature_parts.append(f"{field_name}: {type_name} = {repr(default_value)}")
+                signature_parts.append(
+                    f"{field_name}: {type_name} = {repr(default_value)}"
+                )
             else:
                 signature_parts.append(f"{field_name}: {type_name}")
-        
+
         signature = f"({', '.join(signature_parts)}) -> dict"
-        
+
         return cls.model_construct(
             name=name,
             description=description,
@@ -267,7 +300,7 @@ class FunctionSchema(BaseModel):
             parameters=parameters,
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, strict_json_types: bool = False) -> dict[str, Any]:
         schema_dict = {
             "type": "function",
             "function": {
@@ -278,7 +311,9 @@ class FunctionSchema(BaseModel):
                     "properties": {
                         k: v
                         for param in self.parameters
-                        for k, v in param.to_dict().items()
+                        for k, v in param.to_dict(
+                            strict_json_types=strict_json_types
+                        ).items()
                     },
                     "required": [
                         param.name for param in self.parameters if param.required
@@ -288,7 +323,12 @@ class FunctionSchema(BaseModel):
         }
         return schema_dict
 
-    def to_openai(self, api: OpenAIAPI=OpenAIAPI.COMPLETIONS) -> dict[str, Any]:
+    def to_openai(
+        self,
+        api: OpenAIAPI = OpenAIAPI.COMPLETIONS,
+        *,
+        strict_json_types: bool = False,
+    ) -> dict[str, Any]:
         """Convert the function schema into OpenAI-compatible formats. Supports
         both completions and responses APIs.
 
@@ -298,7 +338,7 @@ class FunctionSchema(BaseModel):
         :rtype: dict
         """
         if api == "completions":
-            return self.to_dict()
+            return self.to_dict(strict_json_types=strict_json_types)
         elif api == "responses":
             return {
                 "type": "function",
@@ -309,7 +349,9 @@ class FunctionSchema(BaseModel):
                     "properties": {
                         k: v
                         for param in self.parameters
-                        for k, v in param.to_dict().items()
+                        for k, v in param.to_dict(
+                            strict_json_types=strict_json_types
+                        ).items()
                     },
                     "required": [
                         param.name for param in self.parameters if param.required
@@ -323,10 +365,18 @@ class FunctionSchema(BaseModel):
 DEFAULT = set(["default", "openai", "ollama", "litellm"])
 
 
-def get_schemas(callables: list[Callable], format: str = "default") -> list[dict[str, Any]]:
+def get_schemas(
+    callables: list[Callable],
+    format: str = "default",
+    *,
+    strict_json_types: bool = False,
+) -> list[dict[str, Any]]:
     if format in DEFAULT:
         return [
-            FunctionSchema.from_callable(callable).to_dict() for callable in callables
+            FunctionSchema.from_callable(callable).to_dict(
+                strict_json_types=strict_json_types
+            )
+            for callable in callables
         ]
     else:
         raise ValueError(f"Format {format} not supported")
