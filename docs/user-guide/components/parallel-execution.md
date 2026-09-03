@@ -321,3 +321,4 @@ result["b_result"]  # From tool_b
 - Learn about [Graphs](graphs.md) for general graph construction
 - Explore [State](state.md) management for understanding how state flows through parallel branches
 - Check out [Callbacks](callbacks.md) for monitoring parallel execution progress
+- Compare forks with side pipelines in [Parallel Execution vs Branching](parallel-vs-branching.md)
