@@ -1,5 +1,22 @@
 See below for all notable changes to the GraphAI library.
 
+## [0.0.11] - 2026-09-03
+
+### Added
+- Branch edges via `add_branch(source, destination, *, condition=None, wait=True)`
+  - A side pipeline that runs after `source` completes without forking the main path
+  - Follows regular edges from `destination` to the first node with no successors; needs no join or end node
+  - Stops after a step returns `success: False`; failures are recorded in `graph.branch_errors` instead of raised
+  - Optional sync or async `condition` callable and detached mode (`wait=False`), awaited by `execute()` before it returns
+- `upstream` entry in every node's local state (`{"node", "output"}` of the node that just ran), readable by declaring an `upstream` parameter
+- `BranchError` exported from the package root
+- Docs: [Branches](components/branches.md) and [Parallel Execution vs Branching](components/parallel-vs-branching.md)
+
+### Changed
+- `compile()` follows branch edges for reachability and no longer errors on join edges
+- `visualize()` draws branch edges dashed
+- `FunctionSchema.from_callable()` accepts union annotations such as `dict | None`
+
 ## [0.0.10] - TBD
 
 ### Added

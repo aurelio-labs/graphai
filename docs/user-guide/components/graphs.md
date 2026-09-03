@@ -177,5 +177,6 @@ This generates a visual representation of your graph, making it easier to unders
 
 - Learn about [Nodes](nodes.md) to understand how to build processing units
 - Explore [Parallel Execution](parallel-execution.md) for concurrent branch processing
+- Use [Branches](branches.md) for side pipelines that stay off the main path
 - Explore [State](state.md) management for maintaining context
 - Check out [Callbacks](callbacks.md) for implementing streaming
