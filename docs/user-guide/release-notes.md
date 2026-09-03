@@ -1,6 +1,6 @@
 See below for all notable changes to the GraphAI library.
 
-## [0.0.11] - TBD
+## [0.0.11] - 2026-09-03
 
 ### Added
 - Branch edges via `add_branch(source, destination, *, condition=None, wait=True)`
