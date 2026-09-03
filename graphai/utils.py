@@ -132,6 +132,13 @@ class OpenAIAPI(StrEnum):
     COMPLETIONS = "completions"
     RESPONSES = "responses"
 
+def _annotation_name(annotation: Any) -> str:
+    """Readable name for a parameter annotation; unions such as `dict | None`
+    have no `__name__`, so fall back to their string form."""
+    name = getattr(annotation, "__name__", None)
+    return name if isinstance(name, str) else str(annotation)
+
+
 class FunctionSchema(BaseModel):
     """Class that consumes a function and can return a schema required by
     different LLMs for function calling.
@@ -165,7 +172,7 @@ class FunctionSchema(BaseModel):
             parameters.append(
                 Parameter(
                     name=param.name,
-                    type=param.annotation.__name__,
+                    type=_annotation_name(param.annotation),
                     default=param.default,
                     required=param.default is inspect.Parameter.empty,
                 )

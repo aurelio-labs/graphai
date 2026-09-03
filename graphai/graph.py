@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio
-from typing import Any, Iterable, Protocol
+import inspect
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Iterable, Protocol
 from graphlib import TopologicalSorter, CycleError
 
 from graphai.callback import Callback
@@ -37,6 +39,21 @@ class NodeProtocol(Protocol):
     ) -> dict[str, Any]: ...
 
 
+# A branch condition receives the source node's output dict and the graph
+# state, and returns (or resolves to) a truthy value to run the branch.
+BranchCondition = Callable[[dict[str, Any], dict[str, Any]], "bool | Awaitable[bool]"]
+
+
+@dataclass
+class BranchError:
+    """A failure inside a branch pipeline, recorded instead of raised so the
+    main path is never taken down by a side pipeline."""
+
+    source: str
+    destination: str
+    error: Exception
+
+
 def _name_of(x: Any) -> str | None:
     """Return the node name if x is a str or has .name, else None."""
     if x is None:
@@ -69,6 +86,10 @@ class Graph:
         self.Callback: type[Callback] = Callback
         self.max_steps = max_steps
         self.state = initial_state or {}
+        # detached branch pipelines still running; awaited at the end of execute()
+        self._detached_tasks: set[asyncio.Task[Any]] = set()
+        # failures inside branch pipelines, in execution order
+        self.branch_errors: list[BranchError] = []
 
     # Allow getting and setting the graph's internal state
     def get_state(self) -> dict[str, Any]:
@@ -96,7 +117,7 @@ class Graph:
 
         Args:
             values: The new values to update the graph state with.
-            
+
         Returns:
             The graph instance.
         """
@@ -163,6 +184,43 @@ class Graph:
         self.edges.append(edge)
         return self
 
+    def add_branch(
+        self,
+        source: NodeProtocol | str,
+        destination: NodeProtocol | str,
+        *,
+        condition: BranchCondition | None = None,
+        wait: bool = True,
+    ) -> Graph:
+        """Adds a branch edge: a side pipeline that starts at `destination`
+        once `source` has run, without becoming a fork of the main path.
+
+        Regular edges out of a node with two or more successors fork the main
+        path and expect a join. A branch edge instead runs `destination` and
+        whatever regular edges follow it as an isolated pipeline: it needs no
+        join and no end node, it stops at the first node with no successors
+        (or one whose output has `success: False`), and an exception inside it
+        is recorded in `branch_errors` rather than raised. Branches may
+        themselves have branches.
+
+        Args:
+            source: The node whose completion starts the branch.
+            destination: The first node of the branch pipeline.
+            condition: Optional callable `(output, state) -> bool` (may be
+                async) evaluated with the source node's output; the branch is
+                skipped when it returns a falsy value.
+            wait: When True (default) the main path waits for the branch to
+                finish before moving on. When False the branch runs as a
+                detached task; `execute()` still waits for all detached
+                branches before returning.
+        """
+        source_node = self._get_node(node_candidate=source)
+        destination_node = self._get_node(node_candidate=destination)
+        self.edges.append(
+            BranchEdge(source_node, destination_node, condition=condition, wait=wait)
+        )
+        return self
+
     def add_router(
         self,
         sources: list[NodeProtocol],
@@ -171,7 +229,7 @@ class Graph:
     ) -> Graph:
         """Adds a router node, allowing for a decision to be made on which branch to
         follow based on the `choice` output of the router node.
-        
+
         Args:
             sources: The list of source nodes for the router.
             router: The router node.
@@ -231,6 +289,7 @@ class Graph:
         # normalize edges into adjacency {src: set(dst)}
         raw_edges = getattr(self, "edges", None)
         adj: dict[str, set[str]] = {name: set() for name in nodes.keys()}
+
         def _add_edge(src: str, dst: str) -> None:
             if src not in nodes:
                 raise GraphCompileError(f"Edge references unknown source node: {src}")
@@ -239,6 +298,7 @@ class Graph:
                     f"Edge from {src} references unknown node(s): ['{dst}']"
                 )
             adj[src].add(dst)
+
         if raw_edges is None:
             pass
         elif isinstance(raw_edges, dict):
@@ -284,6 +344,10 @@ class Graph:
                         item.get("destination", item.get("dst")), "destination"
                     )
                     _add_edge(src, dst)
+                    continue
+                # join edges have many sources and no single .source; each of
+                # their sources already has a regular edge, so skip them here
+                if isinstance(item, JoinEdge):
                     continue
                 # Object with attributes .source/.destination (or .src/.dst)
                 if hasattr(item, "source") or hasattr(item, "src"):
@@ -335,12 +399,125 @@ class Graph:
     def _get_next_nodes(self, current_node: NodeProtocol) -> list[NodeProtocol]:
         """Return all successor nodes for the given node."""
         # we skip JoinEdge because they don't have regular destinations
-        # and next nodes for those are handled in the execute method
+        # and next nodes for those are handled in the execute method; we
+        # skip BranchEdge because branches never continue the main path
         return [
             edge.destination
             for edge in self.edges
             if isinstance(edge, Edge) and edge.source == current_node
         ]
+
+    def _get_branches(self, current_node: NodeProtocol) -> list[BranchEdge]:
+        return [
+            edge
+            for edge in self.edges
+            if isinstance(edge, BranchEdge) and edge.source == current_node
+        ]
+
+    @staticmethod
+    def _with_upstream(
+        state: dict[str, Any], node: NodeProtocol, output: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Merge a node's output into the local state and record which node
+        produced it, so the next node can read `upstream` if it declares it."""
+        return {**state, **output, "upstream": {"node": node.name, "output": output}}
+
+    async def _run_branches(
+        self,
+        current_node: NodeProtocol,
+        output: dict[str, Any],
+        state: dict[str, Any],
+        callback: Callback,
+    ) -> None:
+        """Start every branch edge leaving `current_node`. Waiting branches run
+        to completion here; detached ones are tracked and awaited by execute()."""
+        for edge in self._get_branches(current_node):
+            if edge.condition is not None:
+                try:
+                    verdict = edge.condition(output, self.state)
+                    if inspect.isawaitable(verdict):
+                        verdict = await verdict
+                except Exception as exc:
+                    logger.exception(
+                        f"Branch condition {edge.source.name} -> {edge.destination.name} raised"
+                    )
+                    self.branch_errors.append(
+                        BranchError(edge.source.name, edge.destination.name, exc)
+                    )
+                    continue
+                if not verdict:
+                    continue
+            run = self._guard_pipeline(edge, state.copy(), callback)
+            if edge.wait:
+                await run
+            else:
+                task = asyncio.create_task(run)
+                self._detached_tasks.add(task)
+                task.add_done_callback(self._detached_tasks.discard)
+
+    async def _guard_pipeline(
+        self, edge: BranchEdge, state: dict[str, Any], callback: Callback
+    ) -> None:
+        try:
+            await self._execute_pipeline(edge.destination, state, callback, steps=0)
+        except Exception as exc:
+            logger.exception(
+                f"Branch pipeline {edge.source.name} -> {edge.destination.name} failed"
+            )
+            self.branch_errors.append(
+                BranchError(edge.source.name, edge.destination.name, exc)
+            )
+
+    async def _execute_pipeline(
+        self,
+        node: NodeProtocol,
+        state: dict[str, Any],
+        callback: Callback,
+        steps: int,
+    ) -> dict[str, Any]:
+        """Walk regular edges from `node` until a terminal node, without join
+        handling. A node with several successors fans out concurrently and the
+        results are merged. Stops early when a node's output has
+        `success: False`, so a failed step does not feed the steps after it."""
+        while True:
+            output = await self._invoke_node(node, state, callback)
+            state = self._with_upstream(state, node, output)
+            await self._run_branches(node, output, state, callback)
+            if output.get("success") is False or node.is_end:
+                return state
+            if node.is_router and ("choice" in output or "choices" in output):
+                names = output.get("choices") or [output["choice"]]
+                next_nodes = [self._get_node_by_name(str(name)) for name in names]
+            else:
+                next_nodes = self._get_next_nodes(node)
+            if not next_nodes:
+                return state
+            steps += 1
+            if steps >= self.max_steps:
+                raise Exception(
+                    f"Max steps reached in branch pipeline: {self.max_steps}. You can modify "
+                    "this by setting `max_steps` when initializing the Graph object."
+                )
+            if len(next_nodes) == 1:
+                node = next_nodes[0]
+                continue
+            results = await asyncio.gather(
+                *(
+                    self._execute_pipeline(n, state.copy(), callback, steps)
+                    for n in next_nodes
+                )
+            )
+            merged = state.copy()
+            for res in results:
+                merged.update({k: v for k, v in res.items() if k != "callback"})
+            return merged
+
+    async def wait_for_branches(self) -> None:
+        """Wait for every detached branch pipeline started by this graph.
+        Called by execute() before it returns; exposed for callers that drive
+        `_execute_branch` themselves."""
+        while self._detached_tasks:
+            await asyncio.gather(*list(self._detached_tasks), return_exceptions=True)
 
     async def _invoke_node(
         self, node: NodeProtocol, state: dict[str, Any], callback: Callback
@@ -377,7 +554,9 @@ class Graph:
         """
         while True:
             output = await self._invoke_node(current_node, state, callback)
-            state = {**state, **output}  # merge node output into local state
+            # merge node output into local state
+            state = self._with_upstream(state, current_node, output)
+            await self._run_branches(current_node, output, state, callback)
             if current_node.is_end:
                 break
             if current_node.is_router:
@@ -443,10 +622,12 @@ class Graph:
                     # JoinEdge.destination node
                     join_edge = next(
                         (
-                            e for e in self.edges if isinstance(e, JoinEdge)
+                            e
+                            for e in self.edges
+                            if isinstance(e, JoinEdge)
                             and any(n in e.sources for n in next_nodes)
                         ),
-                        None
+                        None,
                     )
                     if not join_edge:
                         raise Exception("No JoinEdge found for next_nodes")
@@ -475,11 +656,16 @@ class Graph:
         assert self.start_node is not None, "Graph must be compiled before execution"
 
         state = input
+        self.branch_errors = []
         result = await self._execute_branch(self.start_node, state, callback, 0)
+        # detached branches must finish before the run is reported complete
+        await self.wait_for_branches()
         # TODO JB: may need to add end callback here to close the queue for every execution
         if callback and "callback" in result:
             await callback.close()
             del result["callback"]
+        # upstream is a per-step hint for nodes, not part of the run's result
+        result.pop("upstream", None)
         return result
 
     async def execute_many(
@@ -571,7 +757,7 @@ class Graph:
         self, sources: list[NodeProtocol | str], destination: NodeProtocol | str
     ):
         """Joins multiple parallel branches into a single branch.
-        
+
         Args:
             sources: The list of source nodes for the join.
             destination: The destination node for the join.
@@ -611,7 +797,13 @@ class Graph:
             G.add_node(node.name)
 
         for edge in self.edges:
-            G.add_edge(edge.source.name, edge.destination.name)
+            if isinstance(edge, JoinEdge):
+                continue
+            G.add_edge(
+                edge.source.name,
+                edge.destination.name,
+                style="dashed" if isinstance(edge, BranchEdge) else "solid",
+            )
 
         if nx.is_directed_acyclic_graph(G):
             logger.info(
@@ -667,6 +859,7 @@ class Graph:
             arrows=True,
             edge_color="gray",
             arrowsize=20,
+            style=[G.edges[e].get("style", "solid") for e in G.edges],
         )
 
         if save_path:
@@ -682,7 +875,26 @@ class Edge:
         self.source = source
         self.destination = destination
 
+
 class JoinEdge:
     def __init__(self, sources, destination):
         self.sources = sources
         self.destination = destination
+
+
+class BranchEdge:
+    """Side edge from `source` to the first node of an isolated pipeline.
+    See `Graph.add_branch`."""
+
+    def __init__(
+        self,
+        source,
+        destination,
+        *,
+        condition: BranchCondition | None = None,
+        wait: bool = True,
+    ):
+        self.source = source
+        self.destination = destination
+        self.condition = condition
+        self.wait = wait
