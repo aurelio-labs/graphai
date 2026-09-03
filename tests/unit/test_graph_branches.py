@@ -91,7 +91,7 @@ async def test_branch_condition_sync_and_async():
         return {"input": input}
 
     async def async_true(output: dict, state: dict) -> bool:
-        return output["node_output"]["rows"] == [1, 2]
+        return bool(output["node_output"]["rows"] == [1, 2])
 
     g = Graph()
     for n in (start, work, end, skipped, taken):
