@@ -641,10 +641,9 @@ class Graph:
                     if not join_edge:
                         raise Exception("No JoinEdge found for next_nodes")
                     # set current_node (for next iteration) to the JoinEdge.destination
+                    # and fall through so the fan-out counts against max_steps
                     current_node = join_edge.destination
-                    # continue to the destination node with our merged state
                     state = merged
-                    continue
                 else:
                     # if this happens we have multiple branches that do not join so we
                     # can just return the merged states

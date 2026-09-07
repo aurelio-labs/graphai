@@ -91,3 +91,50 @@ class TestMaxSteps:
         graph.compile()
         with pytest.raises(MaxStepsError):
             await graph.execute({"input": "x"})
+
+
+@pytest.mark.asyncio
+async def test_parallel_fan_out_join_loop_raises_max_steps():
+    """router -> [tool_a, tool_b] -> join -> router ... must also be bounded."""
+    calls = {"router": 0}
+
+    @node(start=True)
+    async def start(input: dict):
+        """Start"""
+        return {}
+
+    @router(name="fan_router")
+    async def fan_router(input: dict):
+        """Always fans out"""
+        calls["router"] += 1
+        return {"choices": ["tool_a", "tool_b"]}
+
+    @node(name="tool_a")
+    async def tool_a(input: dict):
+        """A"""
+        return {"a": 1}
+
+    @node(name="tool_b")
+    async def tool_b(input: dict):
+        """B"""
+        return {"b": 2}
+
+    @node(end=True)
+    async def end(input: dict):
+        """End"""
+        return {}
+
+    g = Graph(max_steps=6)
+    g.add_node(start).add_node(fan_router).add_node(tool_a).add_node(tool_b).add_node(
+        end
+    )
+    g.add_edge(start, fan_router)
+    g.add_edge(fan_router, tool_a)
+    g.add_edge(fan_router, tool_b)
+    g.add_join([tool_a, tool_b], fan_router)
+    g.add_edge(fan_router, end)
+
+    with pytest.raises(MaxStepsError):
+        await g.execute({"input": {}})
+    # start(1), router(2), fan-out(3), router(4), fan-out(5), router(6) -> raise
+    assert calls["router"] == 3
