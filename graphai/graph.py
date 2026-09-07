@@ -22,6 +22,18 @@ class GraphCompileError(GraphError):
     pass
 
 
+class MaxStepsError(GraphError):
+    """Raised when a run exceeds the graph's `max_steps` before reaching an end node."""
+
+    def __init__(self, max_steps: int, where: str = "") -> None:
+        self.max_steps = max_steps
+        suffix = f" in {where}" if where else ""
+        super().__init__(
+            f"Max steps reached{suffix}: {max_steps}. You can modify this by setting "
+            "`max_steps` when initializing the Graph object."
+        )
+
+
 class NodeProtocol(Protocol):
     """Protocol defining the interface of a decorated node."""
 
@@ -494,10 +506,7 @@ class Graph:
                 return state
             steps += 1
             if steps >= self.max_steps:
-                raise Exception(
-                    f"Max steps reached in branch pipeline: {self.max_steps}. You can modify "
-                    "this by setting `max_steps` when initializing the Graph object."
-                )
+                raise MaxStepsError(self.max_steps, where="branch pipeline")
             if len(next_nodes) == 1:
                 node = next_nodes[0]
                 continue
@@ -566,11 +575,11 @@ class Graph:
                     del output["choices"]
                     next_nodes = [self._get_node_by_name(name) for name in choice_names]
                 else:
-                    # otherwise business as usual - get the next node only
+                    # single choice: same path as a sequential edge so the
+                    # transition is counted against max_steps
                     next_node_name = str(output["choice"])
                     del output["choice"]
-                    current_node = self._get_node_by_name(node_name=next_node_name)
-                    continue
+                    next_nodes = [self._get_node_by_name(node_name=next_node_name)]
             else:
                 # for sequential execution, we can just get the next node
                 next_nodes = self._get_next_nodes(current_node)
@@ -642,9 +651,7 @@ class Graph:
                     return merged
             steps += 1
             if steps >= self.max_steps:
-                raise Exception(
-                    f"Max steps reached: {self.max_steps}. You can modify this by setting `max_steps` when initializing the Graph object."
-                )
+                raise MaxStepsError(self.max_steps)
         return state
 
     async def execute(self, input: dict[str, Any], callback: Callback | None = None):
