@@ -640,8 +640,9 @@ class Graph:
                     )
                     if not join_edge:
                         raise Exception("No JoinEdge found for next_nodes")
-                    # set current_node (for next iteration) to the JoinEdge.destination
-                    # and fall through so the fan-out counts against max_steps
+                    # the parallel layer is a step of its own, then fall through so
+                    # the transition to the join destination is counted as usual
+                    steps += 1
                     current_node = join_edge.destination
                     state = merged
                 else:

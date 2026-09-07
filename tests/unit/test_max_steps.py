@@ -136,5 +136,6 @@ async def test_parallel_fan_out_join_loop_raises_max_steps():
 
     with pytest.raises(MaxStepsError):
         await g.execute({"input": {}})
-    # start(1), router(2), fan-out(3), router(4), fan-out(5), router(6) -> raise
+    # start(1), router(2), fan-out(3), router(4), fan-out(5), router(6) -> raise,
+    # the same budget a sequential router -> tool loop gets
     assert calls["router"] == 3
