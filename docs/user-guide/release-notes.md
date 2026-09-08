@@ -1,5 +1,14 @@
 See below for all notable changes to the GraphAI library.
 
+## [0.0.12] - 2026-09-08
+
+### Fixed
+- `max_steps` is now enforced for router-driven graphs: a router returning a single `choice` and a parallel fan-out through a join both skipped the step counter, so loops such as `router -> tool -> router` were never bounded
+- A parallel layer counts as one step, matching the budget of a sequential `router -> tool` transition
+
+### Added
+- `MaxStepsError` (a `GraphError`) raised when the limit is hit, exported from the package root, with the limit on `.max_steps`
+
 ## [0.0.11] - 2026-09-03
 
 ### Added
