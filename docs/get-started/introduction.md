@@ -1,56 +1,40 @@
-GraphAI is a minimalistic "AI framework" that aims to not be an AI framework at all. Instead, it provides a simple, flexible graph-based architecture that engineers can use to develop their own AI frameworks and projects.
+GraphAI is a minimal "AI framework" that tries hard not to be one. It gives you a small, flexible graph runtime — nodes, edges, routers, state, streaming — and then gets out of the way. You build the agent, the LLM wrapper, the memory, exactly how you want them.
 
-## What is GraphAI?
+## What you get
 
-GraphAI is a lightweight library built around the concept of a computational graph. It provides:
+GraphAI is built around a computational graph. It provides:
 
-1. A **graph-based architecture** for connecting various components in a workflow
-2. An **async-first design** to handle API calls efficiently
-3. **Minimal abstractions** to avoid boxing developers into a specific AI implementation
-4. **Flexible callback mechanisms** for streaming and communication between components
+1. A **graph-based architecture** for wiring components into a workflow.
+2. An **async-first design**, so waiting on API calls doesn't waste compute.
+3. **Minimal abstractions** — no baked-in notion of "LLM" or "Agent" to fight against.
+4. **Callbacks** for streaming and communication between components.
 
-Unlike other AI libraries, GraphAI doesn't ship with predefined concepts of "LLMs", "Agents", or other high-level AI abstractions. Instead, it gives you the tools to build these concepts yourself, exactly how you want them.
+Other libraries ship their own idea of what an LLM, an agent, or a tool should look like. GraphAI doesn't. It hands you the primitives and lets you define those concepts yourself.
 
-## Why GraphAI?
+## Why
 
-Many existing AI frameworks impose their view of what AI applications should look like, creating a "local minimum" that constrains innovation. GraphAI takes a different approach:
+Most AI frameworks impose a shape on your application. That shape becomes a local minimum: fine right up until you need something the framework didn't anticipate. GraphAI takes the opposite stance.
 
-- **Bring your own components**: Use any LLM provider, agent methodology, or telemetry system
-- **Create your perfect workflow**: Build exactly the AI application architecture you need
-- **Escape the box**: Don't be limited by someone else's conception of AI
-- **Focus on flow, not frameworks**: Think about how data and processing should flow through your application
+- **Bring your own components.** Any LLM provider, any agent design, any telemetry.
+- **Build the workflow you actually need**, not the one the framework assumes.
+- **Think in flow, not framework.** Focus on how data moves through your app.
 
-## Key Features
+## The core ideas
 
-### Async-First
+**Async-first.** AI apps spend most of their time waiting on APIs. GraphAI is async from the ground up, so your code stays busy while responses are in flight.
 
-AI applications frequently rely on API calls that involve significant waiting time. GraphAI is built from the ground up to be async-first, allowing your Python code to efficiently handle these operations rather than wasting compute cycles while waiting for responses.
+**A graph of nodes.** Nodes do the work. Edges say where data flows next. Routers are nodes that choose the next path. Complex workflows stay readable because the structure *is* the diagram.
 
-### Graph-Based Architecture
+**Only what you need.** A `Graph` to orchestrate, `@node` and `@router` to define steps, a callback for streaming, and a state dict for context. That's the whole surface.
 
-At its core, GraphAI provides a graph of connected nodes where:
+## When to reach for it
 
-- **Nodes** are processing units that perform specific tasks
-- **Edges** connect nodes to define the flow of data
-- **Routers** (special nodes) make decisions about the next execution path
+GraphAI fits when:
 
-This architecture makes complex workflows simple to understand and modify.
+- You want full control over your architecture.
+- Existing frameworks feel too opinionated.
+- You're mixing components from different ecosystems.
+- You prefer explicit code over magic.
+- You're building something that doesn't fit the usual patterns.
 
-### Minimalist Design
-
-GraphAI provides just what you need, nothing more:
-
-- A `Graph` class for orchestrating execution
-- `Node` and `Router` decorators for defining processing units
-- `Callback` for streaming and communication
-- `State` management for maintaining context
-
-## When to Use GraphAI
-
-Consider GraphAI when:
-
-1. You need complete control over your AI application architecture
-2. Existing frameworks feel too restrictive or opinionated
-3. You want to combine components from different AI ecosystems
-4. You prefer explicit, understandable code over magic abstractions
-5. You're building something truly innovative that doesn't fit existing patterns
+Ready? The [quickstart](quickstart) builds a working agent in a few minutes.

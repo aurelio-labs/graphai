@@ -1,191 +1,131 @@
-GraphAI provides a state management system that allows data to persist across node executions. This state is essential for maintaining context throughout the execution of a graph.
+State is the dict that carries data through a run. It's how a node knows what earlier nodes did.
 
-## State Basics
+## The basics
 
-The graph state is a dictionary that:
+The state dict:
 
-1. Is initialized when the graph is created
-2. Persists throughout the execution of the graph
-3. Can be accessed by nodes during execution
-4. Can be modified and updated as the graph executes
+1. Starts as whatever you pass to `execute()` — or `initial_state`, if you set one.
+2. Lives for the whole run.
+3. Is readable by any node that asks for it.
+4. Grows as nodes return values.
 
-## Initializing State
+## Seeding state
 
-You can initialize the graph state when creating a Graph:
+Set an initial state when you create the graph:
 
 ```python
 from graphai import Graph
 
-# Initialize a graph with initial state
 graph = Graph(initial_state={
     "history": [],
     "context": "initial context",
     "metadata": {
         "user_id": "user123",
-        "session_start": 1625097600
-    }
+        "session_start": 1625097600,
+    },
 })
 ```
 
-If no initial state is provided, an empty dictionary is used.
+Leave it out and the state starts empty.
 
-## Accessing State Methods
-
-The Graph class provides several methods for working with state:
+## The state methods
 
 ```python
-# Get the current state
-current_state = graph.get_state()
-
-# Set a new state (replaces existing state)
-graph.set_state({"new_state": "value"})
-
-# Update the state (merges with existing state)
-graph.update_state({"additional": "data"})
-
-# Reset the state to an empty dictionary
-graph.reset_state()
+current = graph.get_state()
+graph.set_state({"new_state": "value"})       # replace
+graph.update_state({"additional": "data"})    # merge
+graph.reset_state()                           # clear
 ```
 
-## Accessing State in Nodes
+## Reading state in a node
 
-Nodes can access the graph state by including a `state` parameter in their function signature:
+Declare a `state` parameter and GraphAI passes it in:
 
 ```python
 from graphai import node
 
 @node
 async def stateful_node(input: dict, state: dict):
-    # Access the state
     history = state.get("history", [])
     context = state.get("context", "")
-    
-    # Use the state in processing
-    processed_data = process_with_context(input["data"], context)
-    
-    # Return updated information
-    return {"result": processed_data}
+    processed = process_with_context(input["data"], context)
+    return {"result": processed}
 ```
 
-The state is passed automatically to any node that includes a `state` parameter.
+## Changing state
 
-## Modifying State
+Two ways, and both persist.
 
-There are two ways to modify the graph state:
-
-### 1. Return State Changes in Node Output
-
-The most common way to modify state is to include state changes in the node's return value:
+**Return it.** Any key in the returned dict is merged into the state. This is the clearest way to hand data to the next node:
 
 ```python
 @node
 async def update_history(input: dict, state: dict):
-    # Get current history
     history = state.get("history", [])
-    
-    # Add new entry to history
-    new_history = history + [input["query"]]
-    
-    # Return with updated history
     return {
         "result": process(input["query"]),
-        "history": new_history  # This updates the state's history
+        "history": history + [input["query"]],
     }
 ```
 
-When the node returns, any keys in the return dictionary are merged with the current state.
-
-### 2. Directly Update Graph State
-
-For more complex workflows, you can use graph methods directly:
+**Mutate it.** The `state` a node receives is the graph's actual state object, so in-place changes stick:
 
 ```python
 @node
-async def complex_state_update(input: dict, graph):
-    # Process data
-    result = process(input["data"])
-    
-    # Get current state
-    current_state = graph.get_state()
-    
-    # Make complex updates
-    current_state["history"].append(input["query"])
-    current_state["metadata"]["last_processed"] = datetime.now().isoformat()
-    
-    # Set the updated state
-    graph.set_state(current_state)
-    
-    return {"result": result}
+async def append_history(input: dict, state: dict):
+    state.setdefault("history", []).append(input["query"])
+    return {}
 ```
 
-This approach is less common but provides more flexibility for complex state manipulations.
+Returning keys is usually the better habit — it's explicit, and it's easy to see what a node contributes. Mutation is handy for accumulating into an existing list or dict.
 
-## State Persistence
+## State vs. input
 
-The state persists for the lifetime of the graph object. If you need to persist state between graph executions:
+There's no separate "input" mechanism. The dict you pass to `execute()` *is* the initial state, and each node receives whichever keys it declares as parameters. By convention the request goes under an `input` key, which is why so many nodes declare `input: dict` — but that's just a key like any other.
 
 ```python
-# Save state after execution
-result = await graph.execute(input_data)
-saved_state = graph.get_state()
-
-# Store saved_state somewhere (e.g., database)
-store_state(saved_state)
-
-# Later, restore state
-restored_state = load_state()
-graph.set_state(restored_state)
+@node
+async def process_with_both(input: dict, state: dict):
+    query = input["query"]                 # state["input"]["query"]
+    history = state.get("history", [])     # the whole state
+    result = process_with_history(query, history)
+    return {"result": result, "history": history + [query]}
 ```
 
-## State Scoping
+## Persisting across runs
 
-State is scoped to the graph instance. If you create multiple graph instances, each will have its own independent state:
+State lives as long as the graph object. To carry it between runs, save and restore it:
+
+```python
+result = await graph.execute(input={"input": input_data})
+saved = graph.get_state()
+store_state(saved)
+
+# later
+graph.set_state(load_state())
+```
+
+## Scope
+
+State belongs to a graph instance. Two graphs never share it:
 
 ```python
 graph1 = Graph(initial_state={"id": "graph1"})
 graph2 = Graph(initial_state={"id": "graph2"})
 
-# These operate on different state objects
 graph1.update_state({"value": 1})
 graph2.update_state({"value": 2})
 ```
 
-## State vs. Input
+## Good habits
 
-It's important to understand the difference between state and input:
+1. **Keep it serializable** — dicts, lists, strings, numbers — so you can save it.
+2. **Be selective.** Only put things in state that later nodes actually need.
+3. **Write down the shape.** A documented state structure saves everyone time.
+4. **Watch the size.** Don't let it grow without bound in long-running apps.
 
-- **Input**: Data passed to the current node execution
-- **State**: Persistent data that's available across multiple node executions
+## Next steps
 
-For example:
-
-```python
-@node
-async def process_with_both(input: dict, state: dict):
-    # Input is specific to this execution
-    query = input["query"]
-    
-    # State persists across executions
-    history = state.get("history", [])
-    
-    # Use both
-    result = process_with_history(query, history)
-    
-    return {
-        "result": result,
-        "history": history + [query]  # Update state for future nodes
-    }
-```
-
-## Best Practices
-
-1. **Keep state serializable**: Only store data that can be easily serialized (e.g., dicts, lists, strings, numbers)
-2. **Be selective**: Only use state for data that truly needs to persist across nodes
-3. **Document state structure**: Create a clear structure for your state and document it
-4. **Consider state size**: Don't let your state grow unbounded, especially for long-running applications
-
-## Next Steps
-
-- Learn about [Graphs](graphs.md) for orchestrating node execution
-- Explore [Nodes](nodes.md) for processing logic
-- Check out [Callbacks](callbacks.md) for implementing streaming 
+- [Graphs](graphs.md) — orchestrating a run
+- [Nodes](nodes.md) — processing logic
+- [Callbacks](callbacks.md) — streaming

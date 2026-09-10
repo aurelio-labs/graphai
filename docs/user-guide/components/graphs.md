@@ -1,182 +1,166 @@
-The `Graph` is the central orchestration component in GraphAI. It connects `Nodes` and `Routers` into a coherent workflow and manages the execution flow.
+The `Graph` is what ties everything together. It holds your nodes and routers, connects them with edges, and runs them in order.
 
-## Graph Basics
+## The pieces
 
-A graph consists of:
+- **Nodes** do the work.
+- **Edges** say which node runs next.
+- **State** is the shared dict that carries data through the run.
 
-- **Nodes**: Processing units that perform specific tasks
-- **Edges**: Connections between nodes that define the flow of data
-- **State**: Shared context that persists throughout the execution
-
-## Creating a Graph
+## Creating a graph
 
 ```python
 from graphai import Graph
 
-# Create a graph with default settings
 graph = Graph()
 
-# Create a graph with custom max steps and initial state
+# or with a step limit and some starting state
 graph = Graph(max_steps=20, initial_state={"history": []})
 ```
 
-### Parameters
+- `max_steps` (default `10`) caps how many steps a run can take, so a loop can't run forever. Hitting the cap raises `MaxStepsError`.
+- `initial_state` seeds the state dict.
 
-- `max_steps` (int, default=10): Maximum number of steps to prevent infinite loops
-- `initial_state` (Dict[str, Any], optional): Initial state for the graph execution
+## Adding nodes
 
-## Adding Nodes
-
-Nodes are the building blocks of your graph. Each node represents a discrete processing step:
+Add each node you've defined. Constructor methods return the graph, so you can chain them.
 
 ```python
-# Add a node to the graph
-graph.add_node(my_node())
+graph.add_node(my_node)
 
-# Add multiple nodes
-graph.add_node(node_a())
-graph.add_node(node_b())
-graph.add_node(node_c())
+graph.add_node(node_a).add_node(node_b).add_node(node_c)
 ```
 
-Nodes can be:
-- **Start nodes**: Entry points to the graph (only one allowed)
-- **End nodes**: Exit points from the graph (multiple allowed)
-- **Regular nodes**: Intermediate processing steps
-- **Router nodes**: Decision points that determine execution flow
+A node is one of:
 
-## Connecting Nodes with Edges
+- **Start node** — the entry point. Exactly one per graph.
+- **End node** — an exit point. As many as you need.
+- **Regular node** — a processing step.
+- **Router** — a node that decides where to go next.
 
-Edges define how data flows between nodes:
+## Connecting nodes
+
+Edges define the flow. You can pass node objects or their names:
 
 ```python
-# Connect two nodes
 graph.add_edge(source_node, destination_node)
-
-# Can use node names instead of node objects
 graph.add_edge("node_a", "node_b")
 ```
 
-For linear workflows, you simply connect nodes in sequence:
+A straight-line workflow is just a chain of edges:
 
 ```python
 graph.add_edge(node_a, node_b)
 graph.add_edge(node_b, node_c)
 ```
 
-## Working with Routers
+Give one node several outgoing edges and the successors run concurrently — see [Parallel Execution](parallel-execution.md). For side work that shouldn't affect the main path, use [Branches](branches.md).
 
-Routers are special nodes that determine the next node to execute based on their output:
+## Routers
+
+A router picks the next node at run time. Register it with the nodes that lead into it and the nodes it can send to:
 
 ```python
-# Add a router with its sources and destinations
 graph.add_router(
-    sources=[node_a],  # Nodes that can lead to the router
-    router=my_router(), # The router node itself
-    destinations=[node_b, node_c]  # Possible destinations from the router
+    sources=[node_a],
+    router=my_router,
+    destinations=[node_b, node_c],
 )
 ```
 
-The router must return a dictionary containing a `"choice"` key with the name of the next node to execute:
+The router returns a `"choice"` naming the next node:
 
 ```python
 @router
 async def my_router(input: dict):
-    # Decision logic
     if some_condition:
         return {"choice": "node_b", "data": processed_data}
-    else:
-        return {"choice": "node_c", "data": processed_data}
+    return {"choice": "node_c", "data": processed_data}
 ```
 
-## Graph Execution
+Return `"choices"` (a list) instead to run several destinations in parallel.
 
-To execute a graph:
+## Running the graph
 
 ```python
 import asyncio
 
 async def run_graph():
-    # Define initial input
-    input_data = {"query": "Hello, world!"}
-    
-    # Execute the graph
-    result = await graph.execute(input_data)
-    
+    result = await graph.execute(input={"input": {"query": "Hello, world!"}})
     return result
 
-# Run the async function
 result = asyncio.run(run_graph())
 ```
 
-### Execution Flow
+Here's the one thing to really understand: **the dict you pass to `execute()` becomes the state**, and each node receives only the parameters it declares, looked up by name from that state. A node with an `input` parameter gets `state["input"]`. That's why the request goes under an `input` key above. `execute()` returns the final state.
 
-1. The graph starts execution at the designated start node
-2. Each node processes the input and returns an output
-3. The output is merged with the current state and passed to the next node
-4. If a router node is encountered, its `"choice"` output determines the next node
-5. Execution continues until an end node is reached or max_steps is exceeded
+### What happens during a run
 
-## State Management
+1. Execution starts at the start node.
+2. Each node gets its declared parameters from the state, runs, and returns a dict.
+3. That dict is merged into the state.
+4. At a router, the `"choice"` decides the next node.
+5. It continues until an end node runs — or `max_steps` is hit.
 
-The graph maintains a state dictionary that persists throughout execution:
+### Many inputs at once
+
+`execute_many` runs the graph over several inputs concurrently:
 
 ```python
-# Get the current state
-state = graph.get_state()
-
-# Set the state
-graph.set_state({"history": [], "context": "some context"})
-
-# Update the state
-graph.update_state({"new_key": "new_value"})
-
-# Reset the state
-graph.reset_state()
+results = await graph.execute_many(
+    [{"input": {"query": "one"}}, {"input": {"query": "two"}}],
+    concurrency=5,
+)
 ```
 
-Each node receives the current state as an optional parameter:
+Results come back in input order.
+
+## State
+
+The graph keeps a state dict for the whole run:
+
+```python
+state = graph.get_state()
+graph.set_state({"history": [], "context": "some context"})   # replace
+graph.update_state({"new_key": "new_value"})                   # merge
+graph.reset_state()                                             # clear
+```
+
+A node can read the state by declaring a `state` parameter. Changes persist either way — mutate it in place, or return the keys you want merged:
 
 ```python
 @node
 async def my_node(input: dict, state: dict):
-    # Access the state
     history = state.get("history", [])
-    
-    # Update the state (changes won't persist outside this node)
-    # For persistent changes, return them in the output
     return {"output": result, "history": history + [result]}
 ```
 
-## Graph Validation
+[State](state.md) goes into more detail.
 
-Before execution, you can validate that your graph is properly configured:
+## Validating the graph
+
+`compile()` checks the graph before you run it, and raises `GraphCompileError` if something's wrong:
 
 ```python
-# Compile will raise exceptions if the graph is invalid
 graph.compile()
+
+# also reject cycles
+graph.compile(strict=True)
 ```
 
-The compile method checks for:
-- Presence of a start node
-- Presence of at least one end node
-- Graph validity (e.g., no disconnected nodes)
+It checks for a start node, at least one end node, and that every node is reachable. Cycles — like a router that loops back to itself through a tool — are allowed by default, because they're how agents iterate. Pass `strict=True` to forbid them.
 
-## Visualization
-
-GraphAI provides a method to visualize your graph (requires matplotlib and networkx):
+## Visualizing
 
 ```python
-# Visualize the graph
 graph.visualize()
 ```
 
-This generates a visual representation of your graph, making it easier to understand complex workflows.
+Draws the graph, with branch edges dashed. You'll need `networkx` or `matplotlib` installed.
 
-## Next Steps
+## Next steps
 
-- Learn about [Nodes](nodes.md) to understand how to build processing units
-- Explore [Parallel Execution](parallel-execution.md) for concurrent branch processing
-- Use [Branches](branches.md) for side pipelines that stay off the main path
-- Explore [State](state.md) management for maintaining context
-- Check out [Callbacks](callbacks.md) for implementing streaming
+- [Nodes](nodes.md) — building processing steps
+- [Parallel Execution](parallel-execution.md) — forks and joins
+- [Branches](branches.md) — side pipelines off the main path
+- [State](state.md) — carrying context through a run
+- [Callbacks](callbacks.md) — streaming

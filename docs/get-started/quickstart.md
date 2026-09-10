@@ -1,26 +1,24 @@
-This guide will help you build a simple LLM-powered agent using GraphAI and the OpenAI API. By the end, you'll have a functional agent that can:
+Let's build a small LLM-powered agent with GraphAI and the OpenAI API. By the end you'll have an agent that:
 
-1. Determine whether to search for information or use memory
-2. Execute the appropriate action
-3. Generate a response to the user's query
+1. Decides whether to search for information or pull it from memory.
+2. Runs the chosen action.
+3. Writes a response to the user.
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.10+
 - An OpenAI API key
-- Basic understanding of async Python
+- Some familiarity with async Python
 
-## Installation
+## Install
 
 ```bash
-pip install graphai-lib
+pip install graphai-lib semantic-router
 ```
 
-## Building a Simple Agent
+This example uses semantic-router's `OpenAILLM` for the LLM calls. GraphAI itself doesn't depend on it — swap in any client you like.
 
-Let's build a simple agent that can route user questions to either search or memory retrieval.
-
-### Step 1: Set Up Your Dependencies
+## Set up
 
 ```python
 import os
@@ -32,16 +30,14 @@ from semantic_router.schema import Message
 from pydantic import BaseModel, Field
 import openai
 
-# Set your OpenAI API key
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY") or getpass("Enter OpenAI API Key: ")
 
-# Initialize the LLM
-llm = OpenAILLM(name="gpt-4o-2024-08-06")  # Use your preferred model here
+llm = OpenAILLM(name="gpt-4o-2024-08-06")  # use your preferred model
 ```
 
-### Step 2: Define Your Tool Schemas
+## Describe the tools
 
-We'll create Pydantic models for our tools:
+Two Pydantic models describe the agent's options. The LLM will pick one.
 
 ```python
 class Search(BaseModel):
@@ -51,9 +47,13 @@ class Memory(BaseModel):
     query: str = Field(description="Self-directed query to search information from your long-term memory")
 ```
 
-### Step 3: Define Your Nodes
+## Define the nodes
 
-GraphAI uses the concept of nodes to process information. Let's define our nodes:
+Everything in GraphAI is a node: an async function that takes some input and returns a dict. A quick word on how data moves, because it shapes every node you write:
+
+The dict you pass to `graph.execute()` *is* the graph's state. Each node receives only the parameters it declares, looked up by name from that state. So a node with an `input` parameter gets `state["input"]`, and a node with an `output` parameter gets `state["output"]`. Whatever a node returns is merged back into the state.
+
+We'll keep the user's request under an `input` key throughout.
 
 ```python
 @node(start=True)
@@ -88,15 +88,13 @@ async def node_router(input: dict):
 @node
 async def memory(input: dict):
     """Retrieves information from memory."""
-    query = input["query"]
-    # In a real implementation, this would query a vector database
+    # a real implementation would query a vector database
     return {"input": {"text": "The user is in Bali right now.", **input}}
 
 @node
 async def search(input: dict):
     """Searches for information."""
-    query = input["query"]
-    # In a real implementation, this would make a web search
+    # a real implementation would call a search API
     return {
         "input": {
             "text": "The most famous photo spot in Bali is the Uluwatu Temple.",
@@ -128,69 +126,61 @@ async def llm_node(input: dict):
     return {"output": response}
 
 @node(end=True)
-async def node_end(input: dict):
+async def node_end(output: str):
     """Exit point for our graph."""
-    return {"output": input["output"]}
+    return {"output": output}
 ```
 
-### Step 4: Set Up the Graph
+Notice the router. It returns a `"choice"` — the name of the node to run next — alongside the updated `input`. That's all a router needs to do.
 
-The Graph connects all the nodes and defines the flow of information:
+And notice `node_end` declares `output`, not `input`, because the value it wants lives at `state["output"]` (that's what `llm_node` returned).
+
+## Wire up the graph
 
 ```python
-# Initialize the graph
 graph = Graph()
 
-# Add nodes to the graph
-graph.add_node(node_start())
-graph.add_node(node_router())
-graph.add_node(memory())
-graph.add_node(search())
-graph.add_node(llm_node())
-graph.add_node(node_end())
+graph.add_node(node_start)
+graph.add_node(node_router)
+graph.add_node(memory)
+graph.add_node(search)
+graph.add_node(llm_node)
+graph.add_node(node_end)
 
-# Add edges to create the flow
-graph.add_edge(node_start, node_router)  # Start -> Router
-graph.add_edge(search, llm_node)          # Search -> LLM
-graph.add_edge(memory, llm_node)          # Memory -> LLM
-graph.add_edge(llm_node, node_end)        # LLM -> End
+graph.add_edge(node_start, node_router)  # start -> router
+graph.add_edge(search, llm_node)          # search -> llm
+graph.add_edge(memory, llm_node)          # memory -> llm
+graph.add_edge(llm_node, node_end)        # llm -> end
 
-# The router doesn't need explicit edges because it uses the 'choice' output to determine the next node
+# the router needs no outgoing edges: its "choice" picks the next node
 ```
 
-### Step 5: Execute the Graph
-
-Now we can run our agent with a user query:
+## Run it
 
 ```python
 import asyncio
 
 async def run_agent():
-    # Define input with a query and empty chat history
     input_data = {
         "query": "What's the best photo spot in Bali?",
         "chat_history": [
             {"role": "user", "content": "I'm planning a trip to Bali."},
-            {"role": "assistant", "content": "That's wonderful! Bali is a beautiful destination with rich culture, stunning beaches, and vibrant scenery. How can I help with your trip planning?"}
-        ]
+            {"role": "assistant", "content": "That's wonderful! Bali is a beautiful destination with rich culture, stunning beaches, and vibrant scenery. How can I help with your trip planning?"},
+        ],
     }
-    
-    # Execute the graph
-    result = await graph.execute(input_data)
-    
-    # Print the result
+
+    result = await graph.execute(input={"input": input_data})
     print(result["output"])
 
-# Run the async function
 asyncio.run(run_agent())
 ```
 
-## How It Works
+## What just happened
 
-1. The `node_start` node receives the initial input and passes it to the router.
-2. The `node_router` uses an LLM to decide whether to use search or memory based on the query.
-3. The chosen node (either `search` or `memory`) retrieves information.
-4. The `llm_node` generates a response using the retrieved information.
-5. The `node_end` node returns the final output.
+1. `node_start` took the request and stored it under `input`.
+2. `node_router` asked the LLM whether to search or use memory, and returned that as its `choice`.
+3. The chosen node — `search` or `memory` — added context to `input`.
+4. `llm_node` wrote a response and stored it under `output`.
+5. `node_end` returned it.
 
-This simple example demonstrates GraphAI's flexibility. By changing the node implementations, you can easily modify the agent's behavior without changing its overall structure.
+Swap out any node and the rest of the graph doesn't care. That's the point: change what a step does without changing the shape of the whole thing.

@@ -1,160 +1,142 @@
-The Callback system in GraphAI provides a powerful mechanism for streaming data between nodes, particularly useful for handling streaming LLM outputs or other incremental data processing.
+Callbacks are how a graph streams while it runs. A node can push tokens out as it produces them — an LLM's partial response, progress updates — and something outside the graph can consume them live. That's what makes streaming chat UIs and real-time endpoints possible.
 
-## Callback Basics
+## Use `EventCallback`
 
-At its core, the Callback is an asyncio-based system that:
+`EventCallback` emits structured `GraphEvent` objects instead of formatted strings, which makes the stream much easier to consume.
 
-1. Provides a queue for passing streaming data between components
-2. Handles special tokens to mark node start/end events
-3. Structures streaming content for easy consumption by downstream processes
-4. Can be integrated with any async compatible streaming system
+> `Callback`, the original string-based class, is deprecated and will be removed in v0.1.0. It still works, but new code should use `EventCallback`.
 
-## Creating a Callback
-
-The Graph automatically creates a callback when needed, but you can also create and customize one:
+A `Graph` still creates the deprecated `Callback` by default, so tell it to use `EventCallback`:
 
 ```python
-from graphai import Callback
+from graphai import Graph
+from graphai.callback import EventCallback
 
-# Create a callback with default settings
-callback = Callback()
-
-# Create a callback with custom settings
-callback = Callback(
-    identifier="custom_id",  # Used for special tokens
-    special_token_format="<{identifier}:{token}:{params}>",  # Format for special tokens
-    token_format="{token}"  # Format for regular tokens
-)
+graph = Graph()
+graph.set_callback(EventCallback)
 ```
 
-## Callback In Nodes
+From then on, `graph.get_callback()` returns an `EventCallback`, and it's the default whenever `execute()` runs without one.
 
-To use callbacks in a node, mark it with `stream=True`:
+## Streaming from a node
+
+Mark a node with `stream=True` and give it a `callback` parameter. GraphAI injects the callback for you.
 
 ```python
 from graphai import node
 
 @node(stream=True)
 async def streaming_node(input: dict, callback):
-    """This node receives a callback parameter because stream=True."""
-    # Process input
     for chunk in process_chunks(input["data"]):
-        # Stream output chunks
         await callback.acall(chunk)
-    
-    # Return final result
     return {"result": "streaming complete"}
 ```
 
-Important points:
-- The `stream=True` parameter tells GraphAI to inject a callback
-- The node must have a `callback` parameter
-- The callback can be used to stream output chunks
+Two rules. `stream=True` tells GraphAI to inject the callback, and the node must declare a `callback` parameter to receive it.
 
-## Streaming from LLMs
+### Streaming an LLM response
 
-A common use case is streaming output from an LLM:
+The common case:
 
 ```python
 @node(stream=True)
 async def llm_node(input: dict, callback):
-    """Stream output from an LLM."""
     from openai import AsyncOpenAI
-    
+
     client = AsyncOpenAI()
-    
-    # Start streaming response
     stream = await client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": input["query"]}
+            {"role": "user", "content": input["query"]},
         ],
-        stream=True
+        stream=True,
     )
-    
+
     response_text = ""
-    
-    # Stream chunks through the callback
     async for chunk in stream:
-        if chunk.choices[0].delta.content:
-            content = chunk.choices[0].delta.content
+        content = chunk.choices[0].delta.content
+        if content:
             response_text += content
             await callback.acall(content)
-    
-    # Return the complete response
+
     return {"response": response_text}
 ```
 
-## Callback Methods
+## Events
 
-The Callback provides several key methods:
+Everything that flows through the callback is a `GraphEvent`:
 
-### Streaming Content
+- `type` — what happened. One of `GraphEventType.START`, `END`, `START_NODE`, `END_NODE`, or `CALLBACK` (a streamed token).
+- `identifier` — who emitted it. Defaults to `"graphai"`.
+- `token` — the streamed content, for `CALLBACK` events.
+- `params` — optional extra metadata.
+
+Node boundaries and the end of the run are emitted as events too, so a consumer always knows where it is in the execution.
+
+## Emitting events
 
 ```python
-# Synchronous callback (use in sync contexts)
-callback(token="chunk of text")
-
-# Async callback (preferred)
+# async (preferred)
 await callback.acall(token="chunk of text")
+
+# sync, for non-async contexts
+callback(token="chunk of text")
 ```
 
-### Node Management
+Both also take `type`, `identifier`, and `params`, so you can emit something other than a plain token:
 
 ```python
-# Mark the start of a node
+await callback.acall(
+    token="search finished",
+    type="tool_done",          # a GraphEventType, or your own string
+    params={"tool": "search"},
+)
+```
+
+You can mark node boundaries and close the stream yourself as well:
+
+```python
 await callback.start_node(node_name="my_node")
-
-# Mark the end of a node
 await callback.end_node(node_name="my_node")
-
-# Close the callback stream
 await callback.close()
 ```
 
-## Consuming a Callback Stream
+## Consuming the stream
 
-You can consume a callback's stream using its async iterator:
-
-```python
-async def consume_stream(callback):
-    async for token in callback.aiter():
-        # Process each token
-        print(token, end="", flush=True)
-```
-
-This is especially useful for web applications that need to provide real-time updates.
-
-## Special Tokens
-
-GraphAI uses special tokens to mark events in the stream:
-
-```
-<graphai:node_name:start>  # Marks the start of a node
-<graphai:node_name>        # Identifies the node
-<graphai:node_name:end>    # Marks the end of a node
-<graphai:END>              # Marks the end of the stream
-```
-
-These tokens can be customized using the `special_token_format` parameter.
-
-## Example: Web Server with Streaming
-
-Here's how to use callbacks with a FastAPI server:
+`aiter()` is an async iterator over events. Start the graph as a background task, then read from the callback:
 
 ```python
+import asyncio
+
+cb = graph.get_callback()
+task = asyncio.create_task(graph.execute(input={"input": {"query": "hello"}}, callback=cb))
+
+async for event in cb.aiter():
+    if event.type == "callback":
+        print(event.token, end="", flush=True)
+
+await task
+```
+
+Two things worth knowing. Pass the callback into `execute()` explicitly — that's what ties the stream to *that* run, and it keeps concurrent runs from bleeding into each other. And `aiter()` finishes when the stream closes, which happens when execution ends.
+
+## Example: a streaming endpoint
+
+`GraphEvent` objects play nicely with Starlette and FastAPI streaming responses, so a streaming API stays short:
+
+```python
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from graphai import Graph, node
-import asyncio
+from graphai.callback import EventCallback
 
 app = FastAPI()
 
 @node(start=True, stream=True)
 async def llm_stream(input: dict, callback):
-    # Streaming LLM implementation...
-    for chunk in get_llm_response(input["query"]):
+    async for chunk in get_llm_response(input["query"]):
         await callback.acall(chunk)
     return {"status": "complete"}
 
@@ -162,92 +144,36 @@ async def llm_stream(input: dict, callback):
 async def final_node(input: dict):
     return {"status": "success"}
 
-# Create graph
 graph = Graph()
-graph.add_node(llm_stream())
-graph.add_node(final_node())
+graph.set_callback(EventCallback)
+graph.add_node(llm_stream).add_node(final_node)
 graph.add_edge(llm_stream, final_node)
 
 @app.post("/stream")
 async def stream_endpoint(request: Request):
     data = await request.json()
-    
-    # Get a callback from the graph
-    callback = graph.get_callback()
-    
-    # Start graph execution in background
-    asyncio.create_task(graph.execute({"query": data["query"]}))
-    
-    # Return streaming response
-    return StreamingResponse(
-        callback.aiter(),
-        media_type="text/event-stream"
+    cb = graph.get_callback()
+    asyncio.create_task(
+        graph.execute(input={"input": {"query": data["query"]}}, callback=cb)
     )
+
+    async def events():
+        async for event in cb.aiter():
+            if event.token:
+                yield event.token
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 ```
 
-## Callback Configuration
+## Good habits
 
-You can customize the callback's behavior:
+1. **Stay async.** The callback is built on `asyncio`; prefer `acall` over the sync form.
+2. **Pass the callback to `execute()`.** Don't share one instance across runs.
+3. **Stream small chunks.** Tokens, not whole documents.
+4. **Branch on `event.type`.** Handle node boundaries and the end event, not only tokens.
 
-```python
-callback = Callback(
-    # Custom identifier (default is "graphai")
-    identifier="myapp",
-    
-    # Custom format for special tokens
-    special_token_format="<[{identifier}|{token}|{params}]>",
-    
-    # Custom format for regular tokens
-    token_format="TOKEN: {token}"
-)
-```
+## Next steps
 
-## Advanced: Custom Processing of Special Tokens
-
-You can implement custom processing of special tokens:
-
-```python
-async def process_stream(callback):
-    current_node = None
-    buffer = ""
-    
-    async for token in callback.aiter():
-        # Check if it's a special token
-        if token.startswith("<graphai:") and token.endswith(">"):
-            # Handle node start
-            if ":start" in token:
-                node_name = token.split(":")[1].split(":start")[0]
-                current_node = node_name
-                # Handle node start event
-                
-            # Handle node end
-            elif ":end" in token:
-                # Handle node end event
-                current_node = None
-                
-            # Handle stream end
-            elif token == "<graphai:END>":
-                # Handle end of stream
-                break
-                
-        # Regular token
-        else:
-            # Process regular token
-            buffer += token
-            # Maybe do something with buffer
-            
-    return buffer
-```
-
-## Best Practices
-
-1. **Use async whenever possible**: The callback system is built on asyncio
-2. **Close the callback when done**: Always call `await callback.close()` when finished
-3. **Keep streaming chunks small**: Don't stream large objects; break them into manageable chunks
-4. **Handle special tokens correctly**: When consuming streams, handle special tokens appropriately
-
-## Next Steps
-
-- Learn about [Graphs](graphs.md) for orchestrating node execution
-- Explore [Nodes](nodes.md) for processing logic
-- Check out [State](state.md) for maintaining context across nodes 
+- [Graphs](graphs.md) — orchestrating execution
+- [Nodes](nodes.md) — processing logic
+- [State](state.md) — context across nodes
