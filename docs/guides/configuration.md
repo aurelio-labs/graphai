@@ -1,51 +1,46 @@
-GraphAI can be configured using environment variables to customize behavior and output.
+# Configuration
 
-## Environment Variables
+GraphAI is configured through environment variables.
 
-### GRAPHAI_LOG_LEVEL
+## `GRAPHAI_LOG_LEVEL`
 
-Controls the logging output level for GraphAI components. This is useful for debugging or reducing log verbosity in production environments.
+Controls how much GraphAI logs. Handy when debugging, or for quieting things down in production.
 
-**Available levels:**
-- `DEBUG` - Show all messages (most verbose)
-- `INFO` - Show info, warning, error, critical messages (default)
-- `WARNING` - Show warning, error, critical messages  
-- `ERROR` - Show only error and critical messages
-- `CRITICAL` - Show only critical messages
+Levels, loudest to quietest:
 
-**Usage:**
+- `DEBUG` — everything.
+- `INFO` — the default.
+- `WARNING` — warnings and worse.
+- `ERROR` — errors and critical only.
+- `CRITICAL` — critical only.
 
 ```bash
-# Hide warning messages (e.g., missing docstrings in functions)
+# hide warnings, e.g. "Function start has no docstring"
 export GRAPHAI_LOG_LEVEL=ERROR
 
-# Show debug information for troubleshooting
+# see everything while troubleshooting
 export GRAPHAI_LOG_LEVEL=DEBUG
 
-# Set for a single command
+# for a single command
 GRAPHAI_LOG_LEVEL=WARNING python my_script.py
 ```
 
-**Example:**
+If you're seeing lines like this:
 
-If you're seeing warnings like:
 ```
 2025-08-16 13:41:54 WARNING graphai.utils Function start has no docstring
 ```
 
-You can suppress them by setting:
-```bash
-export GRAPHAI_LOG_LEVEL=ERROR
-```
+set the level to `ERROR` to hide them — or better, add the docstring, since function schemas use it as the description an LLM reads.
 
-## Default Values
+## Defaults
 
-| Environment Variable | Default Value | Description |
-|---------------------|---------------|-------------|
-| `GRAPHAI_LOG_LEVEL` | `INFO` | Controls logging verbosity |
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `GRAPHAI_LOG_LEVEL` | `INFO` | Logging verbosity |
 
-## Best Practices
+## Suggested levels
 
-- **Development**: Use `DEBUG` or `INFO` level to see detailed information
-- **Production**: Use `WARNING` or `ERROR` level to reduce log noise
-- **CI/CD**: Use `ERROR` level to only show important issues
+- **Development:** `DEBUG` or `INFO`.
+- **Production:** `WARNING` or `ERROR`.
+- **CI:** `ERROR`, so only real problems surface.

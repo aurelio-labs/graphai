@@ -1,7 +1,6 @@
-
 ## TypeError: object dict can't be used in 'await' expression
 
-This is a common mistake when defining the graph. The internals of `graphai` expect _all_ nodes to be defined with `async def`. When defining a node with `def` we will see this error:
+Every node in GraphAI must be an `async` function — the runtime awaits each one. Define a node with a plain `def` and you'll hit this:
 
 ```
 Traceback (most recent call last):
@@ -17,16 +16,15 @@ Traceback (most recent call last):
 TypeError: object dict can't be used in 'await' expression
 ```
 
-The solution is to always define nodes using `async def`. For example:
+The fix is one word:
 
 ```python
-
-# WRONG:
+# wrong
 @node
 def my_node(input: dict) -> dict:
     return {"output": "Hello, world!"}
 
-# DO THIS INSTEAD:
+# right
 @node
 async def my_node(input: dict) -> dict:
     return {"output": "Hello, world!"}

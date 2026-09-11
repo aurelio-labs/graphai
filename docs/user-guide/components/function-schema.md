@@ -1,18 +1,15 @@
-The function schema functionality in GraphAI provides a powerful way to generate standardized function schemas that can be used with various LLM providers. This feature allows you to automatically generate function schemas from your Python functions, making it easier to integrate with LLM function calling capabilities.
+Most LLM providers accept "function schemas" — a JSON description of a function's name, what it does, and what arguments it takes. Writing those by hand is tedious and easy to get wrong. `FunctionSchema` generates them from your Python functions.
 
-## Overview
+## What it extracts
 
-The `FunctionSchema` class is designed to consume Python functions and generate schemas that are compatible with different LLM providers (OpenAI, Ollama, LiteLLM, etc.). It automatically extracts:
+Given a function, `FunctionSchema` pulls out:
 
-- Function name
-- Function description (from docstring)
-- Function signature
-- Return type
-- Parameters (including types, defaults, and required status)
+- Its name.
+- Its description, from the docstring.
+- Its signature and return type.
+- Each parameter: type, default, and whether it's required.
 
-## Basic Usage
-
-Here's a simple example of how to use the function schema functionality:
+## Basic usage
 
 ```python
 from graphai.utils import FunctionSchema
@@ -24,16 +21,13 @@ def scrape_webpage(url: str, name: str = "test") -> str:
     """
     return "hello there"
 
-# Generate schema from function
 schema = FunctionSchema.from_callable(scrape_webpage)
-
-# Convert to dictionary format (compatible with LLM providers)
 schema_dict = schema.to_dict()
 ```
 
-## Schema Structure
+## The output
 
-The generated schema follows a standardized format:
+`to_dict()` produces the common shape most providers accept:
 
 ```python
 {
@@ -55,19 +49,27 @@ The generated schema follows a standardized format:
 }
 ```
 
-## Parameter Types
+For OpenAI specifically, `to_openai()` targets either the Chat Completions or the Responses API:
 
-The schema automatically maps Python types to LLM-compatible types:
+```python
+from graphai.utils import OpenAIAPI
 
-- `int` → `number`
-- `float` → `number`
+schema.to_openai()                          # Chat Completions (the default)
+schema.to_openai(api=OpenAIAPI.RESPONSES)   # Responses API
+```
+
+## Type mapping
+
+Python types become JSON schema types:
+
+- `int`, `float` → `number`
 - `str` → `string`
 - `bool` → `boolean`
-- Other types → `object`
+- anything else → `object`
 
-## Working with Multiple Functions
+## Several functions at once
 
-You can generate schemas for multiple functions at once using the `get_schemas` utility:
+`get_schemas` builds a list of schemas in one call:
 
 ```python
 from graphai.utils import get_schemas
@@ -80,13 +82,12 @@ def function2(y: str, z: bool = False) -> int:
     """Second function"""
     return len(y)
 
-# Generate schemas for multiple functions
 schemas = get_schemas([function1, function2])
 ```
 
-## Pydantic Model Support
+## From a Pydantic model
 
-The function schema functionality also supports generating schemas from Pydantic models:
+Schemas can come from Pydantic models too. Field types, descriptions, and defaults all carry over:
 
 ```python
 from pydantic import BaseModel
@@ -97,17 +98,13 @@ class SearchQuery(BaseModel):
     query: str
     max_results: int = 10
 
-# Generate schema from Pydantic model
 schema = FunctionSchema.from_pydantic(SearchQuery)
 ```
 
-## Best Practices
+## Getting good schemas
 
-1. **Documentation**: Always include docstrings for your functions. The schema generator will use these as descriptions.
-2. **Type Hints**: Use type hints for all parameters and return values to ensure proper type mapping.
-3. **Default Values**: Consider using default values for optional parameters.
-4. **Required Parameters**: Parameters without default values are automatically marked as required.
+1. **Write docstrings.** They become the description the LLM reads to decide when to call your function.
+2. **Add type hints** on every parameter and the return value, so types map correctly.
+3. **Use defaults** for optional parameters. A parameter with no default is marked required.
 
-## Integration with LLM Providers
-
-The generated schemas are compatible with major LLM interfaces such as OpenAI, LiteLLM, Ollama, and others. Most providers use the same schema format which can be generated with `to_dict`.
+The output works with OpenAI, LiteLLM, Ollama, and any other provider that uses the standard function-calling format.

@@ -1,220 +1,137 @@
-Nodes are the fundamental processing units in GraphAI. They encapsulate discrete pieces of functionality and can be connected to form complex workflows.
+Nodes are the units of work in GraphAI. Each one is an async function that takes some input and returns a dict. You connect them into a graph.
 
-## Node Basics
+## Defining a node
 
-A node in GraphAI is created by decorating an async function with the `@node` decorator:
+Decorate an async function with `@node`:
 
 ```python
 from graphai import node
 
 @node
 async def process_data(input: dict):
-    # Process the input data
     result = do_something(input["data"])
     return {"output": result}
 ```
 
-All nodes must be async functions that:
-1. Accept at least an `input` dictionary
-2. Return a dictionary containing the processed results
+Every node must be `async`, and must return a dict.
 
-## Creating Different Types of Nodes
+## How a node gets its arguments
 
-GraphAI supports several types of nodes for different purposes:
+This is the most important thing to understand about nodes, so it's worth spelling out.
 
-### Standard Nodes
+The graph keeps a state dict. When a node runs, GraphAI looks at the node's signature and passes **only the parameters it declares, pulled from the state by name**. Nothing else.
 
-Standard nodes process data and pass it to the next node:
+So this node receives `state["input"]`:
 
 ```python
 @node
-async def standard_node(input: dict):
-    # Process input
-    return {"processed_data": result}
+async def my_node(input: dict):
+    ...
 ```
 
-### Start Nodes
+And this one receives `state["query"]` and `state["metadata"]`, ignoring everything else in the state:
 
-Start nodes mark the entry point to your graph:
+```python
+@node
+async def selective(query: str, metadata: dict = None):
+    return {"result": process(query, metadata)}
+```
+
+A parameter with no default is required. If it isn't in the state, the run fails with a clear error.
+
+## What a node returns
+
+The dict a node returns is merged into the state, where later nodes can read it:
+
+```python
+@node
+async def my_node(input: dict):
+    result = process(input["data"])
+    return {
+        "processed_data": result,
+        "metadata": {"timestamp": time.time()},
+    }
+```
+
+## Kinds of node
+
+### Start and end
+
+One start node marks the entry point. Any number of end nodes mark exits.
 
 ```python
 @node(start=True)
-async def entry_node(input: dict):
-    # Initial processing
+async def entry(input: dict):
     return {"initialized_data": input}
-```
 
-A graph can have only one start node.
-
-### End Nodes
-
-End nodes mark the exit points from your graph:
-
-```python
 @node(end=True)
-async def exit_node(input: dict):
-    # Final processing
+async def exit(input: dict):
     return {"final_result": processed_result}
 ```
 
-A graph can have multiple end nodes.
+### Streaming
 
-### Streaming Nodes
-
-Nodes that need to stream data (like LLM outputs) can use the `stream` parameter:
+Set `stream=True` and declare a `callback` parameter to stream tokens out while the node runs:
 
 ```python
 @node(stream=True)
 async def streaming_node(input: dict, callback):
-    # Process with streaming
     for chunk in process_chunks(input["data"]):
         await callback.acall(chunk)
     return {"result": "streaming complete"}
 ```
 
-Streaming nodes receive a `callback` parameter that can be used to stream data.
+[Callbacks](callbacks.md) covers this in depth.
 
-## Node Return Values
+### Routers
 
-Nodes must return a dictionary containing their output:
-
-```python
-@node
-async def my_node(input: dict):
-    # Process input
-    result = process(input["data"])
-    
-    # Return a dictionary with results
-    return {
-        "processed_data": result,
-        "metadata": {"timestamp": time.time()}
-    }
-```
-
-The returned dictionary is merged with the current state and passed to the next node.
-
-## Accessing State
-
-Nodes can access the graph's state by adding a `state` parameter:
-
-```python
-@node
-async def stateful_node(input: dict, state: dict):
-    # Access state
-    history = state.get("history", [])
-    
-    # Process with state awareness
-    result = process_with_history(input["data"], history)
-    
-    # Return updated state (will be merged with current state)
-    return {"result": result, "history": history + [result]}
-```
-
-## Router Nodes
-
-Routers are special nodes that determine the next node to execute:
+A router decides which node runs next. It returns a `"choice"` with the next node's name:
 
 ```python
 from graphai import router
 
 @router
-async def route_based_on_content(input: dict):
-    # Analyze input and decide on next node
-    if "query" in input and "question" in input["query"].lower():
+async def route_on_content(input: dict):
+    if "question" in input["query"].lower():
         return {"choice": "question_node", "query": input["query"]}
-    else:
-        return {"choice": "statement_node", "statement": input["query"]}
+    return {"choice": "statement_node", "statement": input["query"]}
 ```
 
-Routers must return a dictionary with a `"choice"` key containing the name of the next node to execute.
+Return `"choices"` (a list of names) to run several nodes in parallel instead. Routers are often driven by an LLM — the [quickstart](../../get-started/quickstart.md) builds one that picks between tools.
 
-### Router Example with LLM
+## Reading state and the previous node
 
-Routers are often implemented using LLMs for intelligent routing:
+Declare a `state` parameter to read the shared state. You can change it in place, or return keys to merge — both persist:
 
 ```python
-@router
-async def llm_router(input: dict):
-    from semantic_router.llms import OpenAILLM
-    from semantic_router.schema import Message
-    import openai
-    from pydantic import BaseModel, Field
-    
-    class SearchRoute(BaseModel):
-        query: str = Field(description="Route to search when needing external information")
-    
-    class MemoryRoute(BaseModel):
-        query: str = Field(description="Route to memory when information is likely known")
-    
-    llm = OpenAILLM(name="gpt-4")
-    messages = [
-        Message(role="system", content="Select the best route for the user query."),
-        Message(role="user", content=input["query"])
-    ]
-    
-    response = llm(
-        messages=messages,
-        function_schemas=[
-            openai.pydantic_function_tool(SearchRoute),
-            openai.pydantic_function_tool(MemoryRoute)
-        ]
-    )
-    
-    # Parse response to get route choice
-    import ast
-    choice = ast.literal_eval(response)[0]
-    
-    return {
-        "choice": choice["function_name"].lower(),
-        "input": {**input, **choice["arguments"]}
-    }
+@node
+async def stateful(input: dict, state: dict):
+    history = state.get("history", [])
+    result = process_with_history(input["data"], history)
+    return {"result": result, "history": history + [result]}
 ```
 
-## Advanced Node Features
+Declare `upstream` to see the node that ran just before this one — its name and its output:
 
-### Named Nodes
+```python
+@node
+async def shape(input: dict, upstream: dict | None = None):
+    rows = upstream["output"]["rows"]
+    return {"rows": rows}
+```
 
-You can provide explicit names for nodes:
+## Naming nodes
+
+A node's name defaults to the function name. Set it explicitly when a router needs to refer to it:
 
 ```python
 @node(name="data_processor")
 async def process_data(input: dict):
-    # ...
     return {"processed": result}
 ```
 
-This is useful when you need to refer to nodes by name in router decisions.
+## Next steps
 
-### Function Signatures
-
-GraphAI automatically handles parameter mapping, so you only need to declare the parameters your node uses:
-
-```python
-@node
-async def selective_processor(query: str, metadata: dict = None):
-    # Only uses query and metadata from the input
-    # Other fields in the input dictionary are ignored
-    result = process(query, metadata)
-    return {"result": result}
-```
-
-The node will only receive the parameters it declares in its signature.
-
-## Node Input Validation
-
-GraphAI validates that nodes receive the required parameters:
-
-```python
-@node
-async def validated_node(required_param: str, optional_param: int = 0):
-    # Will raise an error if required_param is not provided
-    return {"result": process(required_param, optional_param)}
-```
-
-If a node's required parameters are missing, the graph execution will fail with a detailed error message.
-
-## Next Steps
-
-- Learn about [Graph](graphs.md) orchestration to connect your nodes
-- Explore [State](state.md) management for maintaining context
-- Check out [Callbacks](callbacks.md) for implementing streaming responses 
+- [Graphs](graphs.md) — connecting nodes
+- [State](state.md) — carrying context through a run
+- [Callbacks](callbacks.md) — streaming responses
